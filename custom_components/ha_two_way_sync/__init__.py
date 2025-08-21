@@ -1,4 +1,4 @@
-"""Home Assistant 双向同步集成 - 极简版本"""
+""Home Assistant 双向同步集成 - 极简版本"""
 import asyncio
 import logging
 from datetime import datetime

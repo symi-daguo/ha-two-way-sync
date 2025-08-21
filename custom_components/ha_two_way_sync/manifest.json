@@ -5,7 +5,7 @@
   "config_flow": true,
   "dependencies": [],
   "after_dependencies": [],
-  "documentation": "https://github.com/symi-daguo/ha-two-way-sync/blob/main/README.md",
+  "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
   "homeassistant": "2024.1.0",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
