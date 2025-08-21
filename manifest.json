@@ -4,12 +4,12 @@
   "codeowners": ["@symi-daguo"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
+  "documentation": "https://github.com/symi-daguo/ha-two-way-sync/blob/main/README.md",
   "homeassistant": "2024.1.0",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
   "quality_scale": "silver",
   "requirements": [],
   "version": "1.0.0",
-  "integration_type": "service"
+  "integration_type": "device"
 }

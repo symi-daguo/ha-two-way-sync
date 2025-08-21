@@ -135,103 +135,102 @@ class SimpleSyncCoordinator:
         service_data = {"entity_id": target_entity_id}
         
         try:
-        
-        if domain == "light":
-            if source_state.state == "on":
-                # 同步亮度、颜色等属性
+            if domain == "light":
+                if source_state.state == "on":
+                    # 同步亮度、颜色等属性
+                    attrs = {k: v for k, v in source_state.attributes.items() 
+                            if k in ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]}
+                    service_data.update(attrs)
+                    await self.hass.services.async_call("light", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("light", "turn_off", service_data)
+            elif domain == "switch":
+                service = "turn_on" if source_state.state == "on" else "turn_off"
+                await self.hass.services.async_call("switch", service, service_data)
+            elif domain == "cover":
+                if source_state.state == "open":
+                    await self.hass.services.async_call("cover", "open_cover", service_data)
+                elif source_state.state == "closed":
+                    await self.hass.services.async_call("cover", "close_cover", service_data)
+                elif "position" in source_state.attributes:
+                     service_data["position"] = source_state.attributes["position"]
+                     await self.hass.services.async_call("cover", "set_cover_position", service_data)
+            elif domain == "fan":
+                if source_state.state == "on":
+                    attrs = {k: v for k, v in source_state.attributes.items() 
+                            if k in ["speed", "percentage", "preset_mode", "oscillating"]}
+                    service_data.update(attrs)
+                    await self.hass.services.async_call("fan", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("fan", "turn_off", service_data)
+            elif domain == "climate":
+                # 同步空调/地暖状态和温度设置
                 attrs = {k: v for k, v in source_state.attributes.items() 
-                        if k in ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]}
+                        if k in ["temperature", "target_temp_high", "target_temp_low", "hvac_mode", "fan_mode", "preset_mode"]}
                 service_data.update(attrs)
-                await self.hass.services.async_call("light", "turn_on", service_data)
-            else:
-                await self.hass.services.async_call("light", "turn_off", service_data)
-        elif domain == "switch":
-            service = "turn_on" if source_state.state == "on" else "turn_off"
-            await self.hass.services.async_call("switch", service, service_data)
-        elif domain == "cover":
-            if source_state.state == "open":
-                await self.hass.services.async_call("cover", "open_cover", service_data)
-            elif source_state.state == "closed":
-                await self.hass.services.async_call("cover", "close_cover", service_data)
-            elif "position" in source_state.attributes:
-                service_data["position"] = source_state.attributes["position"]
-                await self.hass.services.async_call("cover", "set_cover_position", service_data)
-        elif domain == "fan":
-            if source_state.state == "on":
+                if "hvac_mode" in attrs:
+                    await self.hass.services.async_call("climate", "set_hvac_mode", service_data)
+                if "temperature" in attrs:
+                    await self.hass.services.async_call("climate", "set_temperature", service_data)
+            elif domain == "humidifier":
+                # 同步新风/加湿器状态
+                if source_state.state == "on":
+                    attrs = {k: v for k, v in source_state.attributes.items() 
+                            if k in ["humidity", "mode"]}
+                    service_data.update(attrs)
+                    await self.hass.services.async_call("humidifier", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("humidifier", "turn_off", service_data)
+            elif domain == "water_heater":
+                # 同步热水器状态和温度
                 attrs = {k: v for k, v in source_state.attributes.items() 
-                        if k in ["speed", "percentage", "preset_mode", "oscillating"]}
+                        if k in ["temperature", "operation_mode"]}
                 service_data.update(attrs)
-                await self.hass.services.async_call("fan", "turn_on", service_data)
+                if "temperature" in attrs:
+                    await self.hass.services.async_call("water_heater", "set_temperature", service_data)
+                if "operation_mode" in attrs:
+                    await self.hass.services.async_call("water_heater", "set_operation_mode", service_data)
+            elif domain == "vacuum":
+                # 同步扫地机状态
+                if source_state.state == "cleaning":
+                    await self.hass.services.async_call("vacuum", "start", service_data)
+                elif source_state.state == "docked":
+                    await self.hass.services.async_call("vacuum", "return_to_base", service_data)
+                elif source_state.state == "paused":
+                    await self.hass.services.async_call("vacuum", "pause", service_data)
+            elif domain == "media_player":
+                # 同步媒体播放器状态
+                if source_state.state == "playing":
+                    await self.hass.services.async_call("media_player", "media_play", service_data)
+                elif source_state.state == "paused":
+                    await self.hass.services.async_call("media_player", "media_pause", service_data)
+                elif source_state.state == "off":
+                    await self.hass.services.async_call("media_player", "turn_off", service_data)
+                # 同步音量
+                if "volume_level" in source_state.attributes:
+                    service_data["volume_level"] = source_state.attributes["volume_level"]
+                    await self.hass.services.async_call("media_player", "volume_set", service_data)
+            elif domain == "scene":
+                # 激活场景
+                await self.hass.services.async_call("scene", "turn_on", service_data)
+            elif domain == "script":
+                # 执行脚本
+                await self.hass.services.async_call("script", "turn_on", service_data)
+            elif domain == "input_boolean":
+                service = "turn_on" if source_state.state == "on" else "turn_off"
+                await self.hass.services.async_call("input_boolean", service, service_data)
+            elif domain == "input_select":
+                service_data["option"] = source_state.state
+                await self.hass.services.async_call("input_select", "select_option", service_data)
+            elif domain == "input_number":
+                service_data["value"] = float(source_state.state)
+                await self.hass.services.async_call("input_number", "set_value", service_data)
+            elif domain == "input_text":
+                service_data["value"] = source_state.state
+                await self.hass.services.async_call("input_text", "set_value", service_data)
             else:
-                await self.hass.services.async_call("fan", "turn_off", service_data)
-        elif domain == "climate":
-            # 同步空调/地暖状态和温度设置
-            attrs = {k: v for k, v in source_state.attributes.items() 
-                    if k in ["temperature", "target_temp_high", "target_temp_low", "hvac_mode", "fan_mode", "preset_mode"]}
-            service_data.update(attrs)
-            if "hvac_mode" in attrs:
-                await self.hass.services.async_call("climate", "set_hvac_mode", service_data)
-            if "temperature" in attrs:
-                await self.hass.services.async_call("climate", "set_temperature", service_data)
-        elif domain == "humidifier":
-            # 同步新风/加湿器状态
-            if source_state.state == "on":
-                attrs = {k: v for k, v in source_state.attributes.items() 
-                        if k in ["humidity", "mode"]}
-                service_data.update(attrs)
-                await self.hass.services.async_call("humidifier", "turn_on", service_data)
-            else:
-                await self.hass.services.async_call("humidifier", "turn_off", service_data)
-        elif domain == "water_heater":
-            # 同步热水器状态和温度
-            attrs = {k: v for k, v in source_state.attributes.items() 
-                    if k in ["temperature", "operation_mode"]}
-            service_data.update(attrs)
-            if "temperature" in attrs:
-                await self.hass.services.async_call("water_heater", "set_temperature", service_data)
-            if "operation_mode" in attrs:
-                await self.hass.services.async_call("water_heater", "set_operation_mode", service_data)
-        elif domain == "vacuum":
-            # 同步扫地机状态
-            if source_state.state == "cleaning":
-                await self.hass.services.async_call("vacuum", "start", service_data)
-            elif source_state.state == "docked":
-                await self.hass.services.async_call("vacuum", "return_to_base", service_data)
-            elif source_state.state == "paused":
-                await self.hass.services.async_call("vacuum", "pause", service_data)
-        elif domain == "media_player":
-            # 同步媒体播放器状态
-            if source_state.state == "playing":
-                await self.hass.services.async_call("media_player", "media_play", service_data)
-            elif source_state.state == "paused":
-                await self.hass.services.async_call("media_player", "media_pause", service_data)
-            elif source_state.state == "off":
-                await self.hass.services.async_call("media_player", "turn_off", service_data)
-            # 同步音量
-            if "volume_level" in source_state.attributes:
-                service_data["volume_level"] = source_state.attributes["volume_level"]
-                await self.hass.services.async_call("media_player", "volume_set", service_data)
-        elif domain == "scene":
-            # 激活场景
-            await self.hass.services.async_call("scene", "turn_on", service_data)
-        elif domain == "script":
-            # 执行脚本
-            await self.hass.services.async_call("script", "turn_on", service_data)
-        elif domain == "input_boolean":
-            service = "turn_on" if source_state.state == "on" else "turn_off"
-            await self.hass.services.async_call("input_boolean", service, service_data)
-        elif domain == "input_select":
-            service_data["option"] = source_state.state
-            await self.hass.services.async_call("input_select", "select_option", service_data)
-        elif domain == "input_number":
-            service_data["value"] = float(source_state.state)
-            await self.hass.services.async_call("input_number", "set_value", service_data)
-        elif domain == "input_text":
-            service_data["value"] = source_state.state
-            await self.hass.services.async_call("input_text", "set_value", service_data)
-        else:
-            _LOGGER.warning(f"完美同步暂不支持域类型: {domain}")
-            
+                 _LOGGER.warning(f"完美同步暂不支持域类型: {domain}")
+             
         except ServiceNotFound as err:
             _LOGGER.error(f"完美同步失败，服务不存在: {domain} - {err}")
             raise
@@ -247,60 +246,60 @@ class SimpleSyncCoordinator:
         try:
             # 判断源实体是否为"开"状态
             is_on = source_state.state in ["on", "open", "playing", "cleaning", "heating", "cooling", "auto", "heat", "cool"]
-        
-        if target_domain in ["light", "switch", "fan", "humidifier", "input_boolean"]:
-            service = "turn_on" if is_on else "turn_off"
-            await self.hass.services.async_call(target_domain, service, service_data)
-        elif target_domain == "cover":
-            service = "open_cover" if is_on else "close_cover"
-            await self.hass.services.async_call("cover", service, service_data)
-        elif target_domain == "climate":
-            # 空调/地暖基础同步：开启制热或关闭
-            hvac_mode = "heat" if is_on else "off"
-            service_data["hvac_mode"] = hvac_mode
-            await self.hass.services.async_call("climate", "set_hvac_mode", service_data)
-        elif target_domain == "water_heater":
-            # 热水器基础同步
-            operation_mode = "eco" if is_on else "off"
-            service_data["operation_mode"] = operation_mode
-            await self.hass.services.async_call("water_heater", "set_operation_mode", service_data)
-        elif target_domain == "vacuum":
-            # 扫地机基础同步
-            if is_on:
-                await self.hass.services.async_call("vacuum", "start", service_data)
+            
+            if target_domain in ["light", "switch", "fan", "humidifier", "input_boolean"]:
+                service = "turn_on" if is_on else "turn_off"
+                await self.hass.services.async_call(target_domain, service, service_data)
+            elif target_domain == "cover":
+                service = "open_cover" if is_on else "close_cover"
+                await self.hass.services.async_call("cover", service, service_data)
+            elif target_domain == "climate":
+                # 空调/地暖基础同步：开启制热或关闭
+                hvac_mode = "heat" if is_on else "off"
+                service_data["hvac_mode"] = hvac_mode
+                await self.hass.services.async_call("climate", "set_hvac_mode", service_data)
+            elif target_domain == "water_heater":
+                # 热水器基础同步
+                operation_mode = "eco" if is_on else "off"
+                service_data["operation_mode"] = operation_mode
+                await self.hass.services.async_call("water_heater", "set_operation_mode", service_data)
+            elif target_domain == "vacuum":
+                # 扫地机基础同步
+                if is_on:
+                    await self.hass.services.async_call("vacuum", "start", service_data)
+                else:
+                    await self.hass.services.async_call("vacuum", "return_to_base", service_data)
+            elif target_domain == "media_player":
+                # 媒体播放器基础同步
+                if is_on:
+                    await self.hass.services.async_call("media_player", "media_play", service_data)
+                else:
+                    await self.hass.services.async_call("media_player", "media_pause", service_data)
+            elif target_domain in ["scene", "script"]:
+                # 场景和脚本只能激活
+                if is_on:
+                    await self.hass.services.async_call(target_domain, "turn_on", service_data)
+            elif target_domain == "input_select":
+                # 输入选择器基础同步（设置为第一个或最后一个选项）
+                target_state = self.hass.states.get(target_entity_id)
+                if target_state and "options" in target_state.attributes:
+                    options = target_state.attributes["options"]
+                    if options:
+                        option = options[0] if is_on else options[-1]
+                        service_data["option"] = option
+                        await self.hass.services.async_call("input_select", "select_option", service_data)
+            elif target_domain == "input_number":
+                # 输入数字基础同步（设置为最大值或最小值）
+                target_state = self.hass.states.get(target_entity_id)
+                if target_state:
+                    max_val = target_state.attributes.get("max", 100)
+                    min_val = target_state.attributes.get("min", 0)
+                    value = max_val if is_on else min_val
+                    service_data["value"] = value
+                    await self.hass.services.async_call("input_number", "set_value", service_data)
             else:
-                await self.hass.services.async_call("vacuum", "return_to_base", service_data)
-        elif target_domain == "media_player":
-            # 媒体播放器基础同步
-            if is_on:
-                await self.hass.services.async_call("media_player", "media_play", service_data)
-            else:
-                await self.hass.services.async_call("media_player", "media_pause", service_data)
-        elif target_domain in ["scene", "script"]:
-            # 场景和脚本只能激活
-            if is_on:
-                await self.hass.services.async_call(target_domain, "turn_on", service_data)
-        elif target_domain == "input_select":
-            # 输入选择器基础同步（设置为第一个或最后一个选项）
-            target_state = self.hass.states.get(target_entity_id)
-            if target_state and "options" in target_state.attributes:
-                options = target_state.attributes["options"]
-                if options:
-                    option = options[0] if is_on else options[-1]
-                    service_data["option"] = option
-                    await self.hass.services.async_call("input_select", "select_option", service_data)
-        elif target_domain == "input_number":
-            # 输入数字基础同步（设置为最大值或最小值）
-            target_state = self.hass.states.get(target_entity_id)
-            if target_state:
-                max_val = target_state.attributes.get("max", 100)
-                min_val = target_state.attributes.get("min", 0)
-                value = max_val if is_on else min_val
-                service_data["value"] = value
-                await self.hass.services.async_call("input_number", "set_value", service_data)
-        else:
-            # 其他域类型暂不支持基础同步
-            _LOGGER.warning(f"基础同步暂不支持目标域类型: {target_domain}")
+                # 其他域类型暂不支持基础同步
+                _LOGGER.warning(f"基础同步暂不支持目标域类型: {target_domain}")
                 
         except ServiceNotFound as err:
             _LOGGER.error(f"基础同步失败，服务不存在: {target_domain} - {err}")
