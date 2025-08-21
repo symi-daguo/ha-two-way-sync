@@ -11,5 +11,5 @@
   "quality_scale": "silver",
   "requirements": [],
   "version": "1.0.0",
-  "integration_type": "device"
+  "integration_type": "hub"
 }

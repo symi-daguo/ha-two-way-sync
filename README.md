@@ -36,8 +36,21 @@
 ### 方法二：手动安装
 
 1. 下载最新版本的代码
-2. 将 `custom_components/ha_two_way_sync` 文件夹复制到你的 Home Assistant 配置目录下的 `custom_components` 文件夹中
-3. 重启 Home Assistant
+2. 解压后将整个 `custom_components/ha_two_way_sync` 文件夹复制到你的 Home Assistant 配置目录下的 `custom_components` 文件夹中
+3. 确保目录结构如下：
+   ```
+   config/
+   └── custom_components/
+       └── ha_two_way_sync/
+           ├── __init__.py
+           ├── config_flow.py
+           ├── manifest.json
+           ├── services.yaml
+           └── translations/
+               ├── en.json
+               └── zh.json
+   ```
+4. 重启 Home Assistant
 
 ## ⚙️ 配置说明
 
