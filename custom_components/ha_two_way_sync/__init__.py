@@ -229,8 +229,7 @@ class SimpleSyncCoordinator:
                 service_data["value"] = source_state.state
                 await self.hass.services.async_call("input_text", "set_value", service_data)
             else:
-                 _LOGGER.warning(f"完美同步暂不支持域类型: {domain}")
-             
+                _LOGGER.warning(f"完美同步暂不支持域类型: {domain}")
         except ServiceNotFound as err:
             _LOGGER.error(f"完美同步失败，服务不存在: {domain} - {err}")
             raise
