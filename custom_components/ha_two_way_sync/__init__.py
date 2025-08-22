@@ -32,7 +32,7 @@ class SimpleSyncCoordinator:
         self._unsubscribe_listeners = []
         # 增强的死循环检测机制
         self._last_sync_times = {}  # 记录每个实体的最后同步时间
-        self._sync_cooldown = 0.2  # 0.2秒冷却时间，确保快速响应
+        self._sync_cooldown = 0.2  # 同步冷却时间（秒）
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -138,7 +138,7 @@ class SimpleSyncCoordinator:
             self._last_sync_times[sync_key] = current_time
             
             _LOGGER.debug(f"实体1状态变化: {self.entity1_id} -> {new_state.state}")
-            await self._sync_to_entity(self.entity1_id, self.entity2_id)
+            await self._sync_to_entity(new_state, self.entity2_id)
         except Exception as err:
             _LOGGER.error(f"处理实体1状态变化事件时发生错误: {err}", exc_info=True)
     
@@ -174,7 +174,7 @@ class SimpleSyncCoordinator:
             self._last_sync_times[sync_key] = current_time
             
             _LOGGER.debug(f"实体2状态变化: {self.entity2_id} -> {new_state.state}")
-            await self._sync_to_entity(self.entity2_id, self.entity1_id)
+            await self._sync_to_entity(new_state, self.entity1_id)
         except Exception as err:
             _LOGGER.error(f"处理实体2状态变化事件时发生错误: {err}", exc_info=True)
     
@@ -184,6 +184,11 @@ class SimpleSyncCoordinator:
         sync_start_time = datetime.now().timestamp()
         
         try:
+            # 类型检查：确保source_state是State对象
+            if not hasattr(source_state, 'domain') or not hasattr(source_state, 'entity_id'):
+                _LOGGER.error(f"参数错误：source_state必须是State对象，实际类型: {type(source_state)}")
+                return
+            
             # 检查目标实体是否存在
             target_state = self.hass.states.get(target_entity_id)
             if not target_state:
@@ -225,7 +230,7 @@ class SimpleSyncCoordinator:
             _LOGGER.error(f"同步过程中发生未知错误: {err}", exc_info=True)
         finally:
             # 快速重置标志，提升响应速度
-            await asyncio.sleep(0.05)  # 减少延迟到50毫秒
+            await asyncio.sleep(0.01)  # 减少延迟到10毫秒，提升大量设备同步效率
             self._sync_in_progress = False
     
     async def _perfect_sync(self, source_state: State, target_entity_id: str):
