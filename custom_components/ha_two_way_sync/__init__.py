@@ -347,15 +347,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         hass.data[DOMAIN][entry.entry_id] = coordinator
         
-        # 注册前端资源
-        await hass.http.async_register_static_paths([
-            {
-                "url_path": "/hacsfiles/ha_two_way_sync",
-                "path": hass.config.path("custom_components/ha_two_way_sync/www"),
-                "cache_headers": True,
-            }
-        ])
-        
         # 注册服务（仅在第一次时注册）
         if not hass.services.has_service(DOMAIN, "manual_sync"):
             async def handle_manual_sync(call):
