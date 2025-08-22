@@ -241,27 +241,51 @@ class SimpleSyncCoordinator:
         try:
             if domain == "light":
                 if source_state.state == "on":
-                    # 同步亮度、颜色等属性，避免颜色描述符冲突
+                    # 同步亮度、颜色等属性，确保颜色属性互斥避免冲突
                     attrs = {}
                     
                     # 添加亮度属性
                     if "brightness" in source_state.attributes:
                         attrs["brightness"] = source_state.attributes["brightness"]
                     
-                    # 按优先级选择颜色描述符：hs_color > rgb_color > xy_color > color_temp
-                    if "hs_color" in source_state.attributes:
+                    # 颜色属性互斥处理：优先级 hs_color > rgb_color > xy_color > color_temp
+                    # 只设置一种颜色属性，避免Home Assistant服务调用冲突
+                    color_set = False
+                    if "hs_color" in source_state.attributes and source_state.attributes["hs_color"]:
                         attrs["hs_color"] = source_state.attributes["hs_color"]
-                    elif "rgb_color" in source_state.attributes:
+                        color_set = True
+                    elif "rgb_color" in source_state.attributes and source_state.attributes["rgb_color"]:
                         attrs["rgb_color"] = source_state.attributes["rgb_color"]
-                    elif "xy_color" in source_state.attributes:
+                        color_set = True
+                    elif "xy_color" in source_state.attributes and source_state.attributes["xy_color"]:
                         attrs["xy_color"] = source_state.attributes["xy_color"]
-                    elif "color_temp" in source_state.attributes:
+                        color_set = True
+                    elif "color_temp" in source_state.attributes and source_state.attributes["color_temp"]:
+                        # 只有在没有其他颜色属性时才设置色温
+                        attrs["color_temp"] = source_state.attributes["color_temp"]
+                        color_set = True
+                    
+                    # 如果没有颜色属性但有色温，单独设置色温
+                    if not color_set and "color_temp" in source_state.attributes:
                         attrs["color_temp"] = source_state.attributes["color_temp"]
                     
                     service_data.update(attrs)
-                    await self.hass.services.async_call("light", "turn_on", service_data)
+                    _LOGGER.debug(f"灯光同步属性: {attrs}")
+                    
+                    try:
+                        await self.hass.services.async_call("light", "turn_on", service_data)
+                        _LOGGER.debug(f"灯光同步成功: {target_entity_id}")
+                    except Exception as light_err:
+                        _LOGGER.warning(f"灯光完整同步失败，尝试仅同步开关状态: {light_err}")
+                        # 回退到基础同步，只同步开关状态
+                        basic_service_data = {"entity_id": target_entity_id}
+                        await self.hass.services.async_call("light", "turn_on", basic_service_data)
                 else:
-                    await self.hass.services.async_call("light", "turn_off", service_data)
+                    try:
+                        await self.hass.services.async_call("light", "turn_off", service_data)
+                        _LOGGER.debug(f"灯光关闭同步成功: {target_entity_id}")
+                    except Exception as light_err:
+                        _LOGGER.error(f"灯光关闭同步失败: {target_entity_id} - {light_err}")
             elif domain == "switch":
                 service = "turn_on" if source_state.state == "on" else "turn_off"
                 await self.hass.services.async_call("switch", service, service_data)
