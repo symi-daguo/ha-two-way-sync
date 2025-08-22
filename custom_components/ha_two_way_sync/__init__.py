@@ -1,15 +1,17 @@
 """Home Assistant 双向同步集成"""
-import logging
-from datetime import datetime
-from homeassistant.core import HomeAssistant, Event
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.event import async_track_state_change_event
 import asyncio
+import logging
+import time
+from datetime import datetime
 from typing import Any, Dict
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_STATE_CHANGED
-from homeassistant.core import State
+from homeassistant.core import Event, HomeAssistant, State
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.exceptions import ServiceNotFound, HomeAssistantError
+import voluptuous as vol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ class SimpleSyncCoordinator:
         self._unsubscribe_listeners = []
         # 增强的死循环检测机制
         self._last_sync_times = {}  # 记录每个实体的最后同步时间
-        self._sync_cooldown = 2.0  # 同步冷却时间（秒）
+        self._sync_cooldown = 0.2  # 0.2秒冷却时间，确保快速响应
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -51,6 +53,59 @@ class SimpleSyncCoordinator:
         
         _LOGGER.info(f"双向同步已启用: {self.entity1_id} <-> {self.entity2_id}")
     
+    def _check_important_attrs_changed(self, new_state: State, old_state: State) -> bool:
+        """检查重要属性是否发生变化"""
+        domain = new_state.domain
+        important_attrs = []
+        
+        # 根据域类型定义重要属性
+        if domain == "light":
+            important_attrs = ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]
+        elif domain == "fan":
+            important_attrs = ["speed", "percentage", "preset_mode", "oscillating"]
+        elif domain == "climate":
+            important_attrs = ["temperature", "target_temp_high", "target_temp_low", "hvac_mode", "fan_mode"]
+        elif domain == "cover":
+            important_attrs = ["position", "tilt_position"]
+        elif domain == "media_player":
+            important_attrs = ["volume_level", "source", "sound_mode"]
+        elif domain == "humidifier":
+            important_attrs = ["humidity", "mode"]
+        elif domain == "water_heater":
+            important_attrs = ["temperature", "operation_mode"]
+        elif domain in ["input_number", "input_select", "input_text"]:
+            # 对于输入实体，状态本身就是重要的
+            return False
+        
+        # 检查重要属性是否发生变化
+        for attr in important_attrs:
+            old_val = old_state.attributes.get(attr)
+            new_val = new_state.attributes.get(attr)
+            if old_val != new_val:
+                _LOGGER.debug(f"检测到重要属性变化: {attr} {old_val} -> {new_val}")
+                return True
+        
+        return False
+    
+    def _is_significant_change(self, new_state: State, old_state: State) -> bool:
+        """判断是否为有意义的状态变化"""
+        if old_state is None:
+            return True
+        
+        # 状态变化总是有意义的
+        if new_state.state != old_state.state:
+            return True
+        
+        # 检查重要属性是否变化
+        if self._check_important_attrs_changed(new_state, old_state):
+            return True
+        
+        # 检查last_changed时间，避免重复处理相同事件
+        if new_state.last_changed == old_state.last_changed:
+            return False
+        
+        return False
+    
     async def _handle_entity1_change(self, event: Event):
         """处理实体1的状态变化"""
         if self._sync_in_progress:
@@ -63,21 +118,27 @@ class SimpleSyncCoordinator:
             if not new_state or not old_state:
                 _LOGGER.debug("状态变化事件数据不完整，跳过同步")
                 return
-                
-            if new_state.state == old_state.state:
-                _LOGGER.debug(f"实体 {self.entity1_id} 状态未发生变化，跳过同步")
+            
+            # 使用精确的变化检测
+            if not self._is_significant_change(new_state, old_state):
+                _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity1_id}")
                 return
             
-            # 检查同步冷却时间，防止快速重复同步
-            current_time = datetime.now().timestamp()
-            last_sync_time = self._last_sync_times.get(self.entity1_id, 0)
-            if current_time - last_sync_time < self._sync_cooldown:
-                _LOGGER.debug(f"实体 {self.entity1_id} 在冷却时间内，跳过同步")
-                return
-                
-            _LOGGER.debug(f"开始处理实体 {self.entity1_id} 的状态变化: {old_state.state} -> {new_state.state}")
-            self._last_sync_times[self.entity1_id] = current_time
-            await self._sync_to_entity(new_state, self.entity2_id)
+            # 检查冷却时间
+            sync_key = f"{self.entity1_id}->{self.entity2_id}"
+            current_time = time.time()
+            
+            if sync_key in self._last_sync_times:
+                time_since_last = current_time - self._last_sync_times[sync_key]
+                if time_since_last < self._sync_cooldown:
+                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {self._sync_cooldown}s")
+                    return
+            
+            # 记录同步时间
+            self._last_sync_times[sync_key] = current_time
+            
+            _LOGGER.debug(f"实体1状态变化: {self.entity1_id} -> {new_state.state}")
+            await self._sync_to_entity(self.entity1_id, self.entity2_id)
         except Exception as err:
             _LOGGER.error(f"处理实体1状态变化事件时发生错误: {err}", exc_info=True)
     
@@ -93,27 +154,34 @@ class SimpleSyncCoordinator:
             if not new_state or not old_state:
                 _LOGGER.debug("状态变化事件数据不完整，跳过同步")
                 return
-                
-            if new_state.state == old_state.state:
-                _LOGGER.debug(f"实体 {self.entity2_id} 状态未发生变化，跳过同步")
+            
+            # 使用精确的变化检测
+            if not self._is_significant_change(new_state, old_state):
+                _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity2_id}")
                 return
             
-            # 检查同步冷却时间，防止快速重复同步
-            current_time = datetime.now().timestamp()
-            last_sync_time = self._last_sync_times.get(self.entity2_id, 0)
-            if current_time - last_sync_time < self._sync_cooldown:
-                _LOGGER.debug(f"实体 {self.entity2_id} 在冷却时间内，跳过同步")
-                return
-                
-            _LOGGER.debug(f"开始处理实体 {self.entity2_id} 的状态变化: {old_state.state} -> {new_state.state}")
-            self._last_sync_times[self.entity2_id] = current_time
-            await self._sync_to_entity(new_state, self.entity1_id)
+            # 检查冷却时间
+            sync_key = f"{self.entity2_id}->{self.entity1_id}"
+            current_time = time.time()
+            
+            if sync_key in self._last_sync_times:
+                time_since_last = current_time - self._last_sync_times[sync_key]
+                if time_since_last < self._sync_cooldown:
+                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {self._sync_cooldown}s")
+                    return
+            
+            # 记录同步时间
+            self._last_sync_times[sync_key] = current_time
+            
+            _LOGGER.debug(f"实体2状态变化: {self.entity2_id} -> {new_state.state}")
+            await self._sync_to_entity(self.entity2_id, self.entity1_id)
         except Exception as err:
             _LOGGER.error(f"处理实体2状态变化事件时发生错误: {err}", exc_info=True)
     
     async def _sync_to_entity(self, source_state: State, target_entity_id: str):
         """同步状态到目标实体"""
         self._sync_in_progress = True
+        sync_start_time = datetime.now().timestamp()
         
         try:
             # 检查目标实体是否存在
@@ -144,6 +212,9 @@ class SimpleSyncCoordinator:
                 _LOGGER.debug(f"执行基础同步（配置模式）: {source_domain} -> {target_domain}")
                 await self._basic_sync(source_state, target_entity_id)
                 
+            # 记录同步耗时
+            sync_duration = datetime.now().timestamp() - sync_start_time
+            _LOGGER.debug(f"同步完成，耗时: {sync_duration:.3f}秒")
             _LOGGER.info(f"同步完成: {source_state.entity_id} -> {target_entity_id}")
                 
         except ServiceNotFound as err:
@@ -153,8 +224,8 @@ class SimpleSyncCoordinator:
         except Exception as err:
             _LOGGER.error(f"同步过程中发生未知错误: {err}", exc_info=True)
         finally:
-            # 延迟重置标志，避免循环同步
-            await asyncio.sleep(0.1)
+            # 快速重置标志，提升响应速度
+            await asyncio.sleep(0.05)  # 减少延迟到50毫秒
             self._sync_in_progress = False
     
     async def _perfect_sync(self, source_state: State, target_entity_id: str):
