@@ -1,13 +1,14 @@
-"""Home Assistant 双向同步集成 - 极简版本"""
-import asyncio
+"""Home Assistant 双向同步集成"""
 import logging
 from datetime import datetime
+from homeassistant.core import HomeAssistant, Event
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.event import async_track_state_change_event
+import asyncio
 from typing import Any, Dict
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_STATE_CHANGED
-from homeassistant.core import HomeAssistant, Event, State
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.core import State
 from homeassistant.exceptions import ServiceNotFound, HomeAssistantError
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,11 +22,15 @@ class SimpleSyncCoordinator:
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry):
         self.hass = hass
         self.config_entry = config_entry
+        self._config = config_entry.data
         self.entity1_id = config_entry.data.get("entity1")
         self.entity2_id = config_entry.data.get("entity2")
         self.enabled = config_entry.data.get("enabled", True)
         self._sync_in_progress = False
         self._unsubscribe_listeners = []
+        # 增强的死循环检测机制
+        self._last_sync_times = {}  # 记录每个实体的最后同步时间
+        self._sync_cooldown = 2.0  # 同步冷却时间（秒）
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -62,8 +67,16 @@ class SimpleSyncCoordinator:
             if new_state.state == old_state.state:
                 _LOGGER.debug(f"实体 {self.entity1_id} 状态未发生变化，跳过同步")
                 return
+            
+            # 检查同步冷却时间，防止快速重复同步
+            current_time = datetime.now().timestamp()
+            last_sync_time = self._last_sync_times.get(self.entity1_id, 0)
+            if current_time - last_sync_time < self._sync_cooldown:
+                _LOGGER.debug(f"实体 {self.entity1_id} 在冷却时间内，跳过同步")
+                return
                 
             _LOGGER.debug(f"开始处理实体 {self.entity1_id} 的状态变化: {old_state.state} -> {new_state.state}")
+            self._last_sync_times[self.entity1_id] = current_time
             await self._sync_to_entity(new_state, self.entity2_id)
         except Exception as err:
             _LOGGER.error(f"处理实体1状态变化事件时发生错误: {err}", exc_info=True)
@@ -84,8 +97,16 @@ class SimpleSyncCoordinator:
             if new_state.state == old_state.state:
                 _LOGGER.debug(f"实体 {self.entity2_id} 状态未发生变化，跳过同步")
                 return
+            
+            # 检查同步冷却时间，防止快速重复同步
+            current_time = datetime.now().timestamp()
+            last_sync_time = self._last_sync_times.get(self.entity2_id, 0)
+            if current_time - last_sync_time < self._sync_cooldown:
+                _LOGGER.debug(f"实体 {self.entity2_id} 在冷却时间内，跳过同步")
+                return
                 
             _LOGGER.debug(f"开始处理实体 {self.entity2_id} 的状态变化: {old_state.state} -> {new_state.state}")
+            self._last_sync_times[self.entity2_id] = current_time
             await self._sync_to_entity(new_state, self.entity1_id)
         except Exception as err:
             _LOGGER.error(f"处理实体2状态变化事件时发生错误: {err}", exc_info=True)
@@ -106,14 +127,21 @@ class SimpleSyncCoordinator:
             
             _LOGGER.debug(f"开始同步: {source_state.entity_id}({source_domain}) -> {target_entity_id}({target_domain})")
             
-            # 检测同步类型
-            if source_domain == target_domain:
-                # 相同类型实体 - 完美同步
-                _LOGGER.debug(f"执行完美同步: {source_domain} -> {target_domain}")
-                await self._perfect_sync(source_state, target_entity_id)
+            # 获取同步模式配置
+            sync_mode = self._config.get("sync_mode", "perfect")
+            
+            # 根据配置的同步模式选择同步方式
+            if sync_mode == "perfect":
+                # 完美同步模式：相同类型实体完美同步，不同类型实体基础同步
+                if source_domain == target_domain:
+                    _LOGGER.debug(f"执行完美同步: {source_domain} -> {target_domain}")
+                    await self._perfect_sync(source_state, target_entity_id)
+                else:
+                    _LOGGER.debug(f"执行基础同步（不同类型）: {source_domain} -> {target_domain}")
+                    await self._basic_sync(source_state, target_entity_id)
             else:
-                # 不同类型实体 - 只同步开关状态
-                _LOGGER.debug(f"执行基础同步: {source_domain} -> {target_domain}")
+                # 基础同步模式：所有实体都只同步开关状态
+                _LOGGER.debug(f"执行基础同步（配置模式）: {source_domain} -> {target_domain}")
                 await self._basic_sync(source_state, target_entity_id)
                 
             _LOGGER.info(f"同步完成: {source_state.entity_id} -> {target_entity_id}")
@@ -137,9 +165,23 @@ class SimpleSyncCoordinator:
         try:
             if domain == "light":
                 if source_state.state == "on":
-                    # 同步亮度、颜色等属性
-                    attrs = {k: v for k, v in source_state.attributes.items() 
-                            if k in ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]}
+                    # 同步亮度、颜色等属性，避免颜色描述符冲突
+                    attrs = {}
+                    
+                    # 添加亮度属性
+                    if "brightness" in source_state.attributes:
+                        attrs["brightness"] = source_state.attributes["brightness"]
+                    
+                    # 按优先级选择颜色描述符：hs_color > rgb_color > xy_color > color_temp
+                    if "hs_color" in source_state.attributes:
+                        attrs["hs_color"] = source_state.attributes["hs_color"]
+                    elif "rgb_color" in source_state.attributes:
+                        attrs["rgb_color"] = source_state.attributes["rgb_color"]
+                    elif "xy_color" in source_state.attributes:
+                        attrs["xy_color"] = source_state.attributes["xy_color"]
+                    elif "color_temp" in source_state.attributes:
+                        attrs["color_temp"] = source_state.attributes["color_temp"]
+                    
                     service_data.update(attrs)
                     await self.hass.services.async_call("light", "turn_on", service_data)
                 else:

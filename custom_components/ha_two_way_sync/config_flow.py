@@ -53,6 +53,7 @@ class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "entity1": entity1,
                             "entity2": entity2,
                             "enabled": user_input.get("enabled", True),
+                            "sync_mode": user_input.get("sync_mode", "perfect"),
                         }
                     )
         
@@ -79,6 +80,15 @@ class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             ),
             vol.Optional("enabled", default=True): selector.BooleanSelector(),
+            vol.Optional("sync_mode", default="perfect"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "perfect", "label": "完美同步（同步所有属性）"},
+                        {"value": "basic", "label": "基础同步（仅开关状态）"}
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN
+                )
+            ),
         })
         
         return self.async_show_form(
@@ -120,6 +130,20 @@ class TwoWaySyncOptionsFlow(config_entries.OptionsFlow):
                     "enabled", self.config_entry.data.get("enabled", True)
                 )
             ): selector.BooleanSelector(),
+            vol.Optional(
+                "sync_mode",
+                default=self.config_entry.options.get(
+                    "sync_mode", self.config_entry.data.get("sync_mode", "perfect")
+                )
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": "perfect", "label": "完美同步（同步所有属性）"},
+                        {"value": "basic", "label": "基础同步（仅开关状态）"}
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN
+                )
+            ),
         })
         
         return self.async_show_form(
