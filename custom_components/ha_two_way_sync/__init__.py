@@ -354,35 +354,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             True,
         )
         
-        # 注册服务
-        async def handle_manual_sync(call):
-            """处理手动同步服务"""
-            try:
-                entity1 = call.data.get("entity1")
-                entity2 = call.data.get("entity2")
-                
-                if entity1 and entity2:
-                    _LOGGER.info(f"开始手动同步: {entity1} -> {entity2}")
-                    state1 = hass.states.get(entity1)
-                    if state1:
-                        await coordinator._sync_to_entity(state1, entity2)
-                        _LOGGER.info("手动同步完成")
+        # 注册服务（仅在第一次时注册）
+        if not hass.services.has_service(DOMAIN, "manual_sync"):
+            async def handle_manual_sync(call):
+                """处理手动同步服务"""
+                try:
+                    entity1 = call.data.get("entity1")
+                    entity2 = call.data.get("entity2")
+                    
+                    if entity1 and entity2:
+                        _LOGGER.info(f"开始手动同步: {entity1} -> {entity2}")
+                        state1 = hass.states.get(entity1)
+                        if state1:
+                            # 查找对应的协调器
+                            target_coordinator = None
+                            for coord in hass.data[DOMAIN].values():
+                                if hasattr(coord, 'entity1_id') and hasattr(coord, 'entity2_id'):
+                                    if (coord.entity1_id == entity1 and coord.entity2_id == entity2) or \
+                                       (coord.entity1_id == entity2 and coord.entity2_id == entity1):
+                                        target_coordinator = coord
+                                        break
+                            
+                            if target_coordinator:
+                                await target_coordinator._sync_to_entity(state1, entity2)
+                                _LOGGER.info("手动同步完成")
+                            else:
+                                _LOGGER.error(f"手动同步失败: 未找到对应的同步配置")
+                        else:
+                            _LOGGER.error(f"手动同步失败: 实体 {entity1} 不存在")
+                except Exception as err:
+                    _LOGGER.error(f"手动同步失败: {err}", exc_info=True)
+            
+            hass.services.async_register(DOMAIN, "manual_sync", handle_manual_sync)
+            _LOGGER.info("已注册手动同步服务")
+        
+        if not hass.services.has_service(DOMAIN, "toggle_sync"):
+            async def handle_toggle_sync(call):
+                """处理切换同步状态服务"""
+                try:
+                    entity1 = call.data.get("entity1")
+                    entity2 = call.data.get("entity2")
+                    
+                    # 查找对应的协调器
+                    target_coordinator = None
+                    for coord in hass.data[DOMAIN].values():
+                        if hasattr(coord, 'entity1_id') and hasattr(coord, 'entity2_id'):
+                            if (coord.entity1_id == entity1 and coord.entity2_id == entity2) or \
+                               (coord.entity1_id == entity2 and coord.entity2_id == entity1):
+                                target_coordinator = coord
+                                break
+                    
+                    if target_coordinator:
+                        old_status = target_coordinator.enabled
+                        target_coordinator.enabled = not target_coordinator.enabled
+                        _LOGGER.info(f"同步状态已从 {'启用' if old_status else '禁用'} 切换为 {'启用' if target_coordinator.enabled else '禁用'}")
                     else:
-                        _LOGGER.error(f"手动同步失败: 实体 {entity1} 不存在")
-            except Exception as err:
-                _LOGGER.error(f"手动同步失败: {err}", exc_info=True)
-        
-        async def handle_toggle_sync(call):
-            """处理切换同步状态服务"""
-            try:
-                old_status = coordinator.enabled
-                coordinator.enabled = not coordinator.enabled
-                _LOGGER.info(f"同步状态已从 {'启用' if old_status else '禁用'} 切换为 {'启用' if coordinator.enabled else '禁用'}")
-            except Exception as err:
-                _LOGGER.error(f"切换同步状态失败: {err}", exc_info=True)
-        
-        hass.services.async_register(DOMAIN, "manual_sync", handle_manual_sync)
-        hass.services.async_register(DOMAIN, "toggle_sync", handle_toggle_sync)
+                        _LOGGER.error(f"切换同步状态失败: 未找到对应的同步配置")
+                except Exception as err:
+                    _LOGGER.error(f"切换同步状态失败: {err}", exc_info=True)
+            
+            hass.services.async_register(DOMAIN, "toggle_sync", handle_toggle_sync)
+            _LOGGER.info("已注册切换同步状态服务")
         
         _LOGGER.info(f"双向同步集成设置完成: {entity1_id} <-> {entity2_id}")
         return True

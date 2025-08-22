@@ -41,12 +41,11 @@ class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["entity2"] = "entity_not_found"
                 
                 if not errors:
-                    # 创建唯一的条目ID
+                    # 创建条目标题
                     title = f"{entity1} <-> {entity2}"
                     
-                    # 检查是否已存在相同的同步配置
-                    await self.async_set_unique_id(f"{entity1}_{entity2}")
-                    self._abort_if_unique_id_configured()
+                    # 允许多个配置条目，不检查重复配置
+                    # 用户可能需要为不同的设备对创建多个同步配置
                     
                     return self.async_create_entry(
                         title=title,
