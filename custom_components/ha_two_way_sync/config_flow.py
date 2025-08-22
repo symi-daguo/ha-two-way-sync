@@ -1,4 +1,4 @@
-""Home Assistant 双向同步集成配置流程"""
+"""Home Assistant 双向同步集成配置流程"""
 import logging
 from typing import Any, Dict, Optional
 
