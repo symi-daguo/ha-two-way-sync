@@ -104,7 +104,7 @@ class TwoWaySyncOptionsFlow(config_entries.OptionsFlow):
     
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """初始化选项流程"""
-        self.config_entry = config_entry
+        super().__init__(config_entry)
     
     async def async_step_init(
         self, user_input: Optional[Dict[str, Any]] = None
