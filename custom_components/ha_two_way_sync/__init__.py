@@ -135,9 +135,9 @@ class SimpleSyncCoordinator:
             has_progressive = self._has_progressive_change(old_state, new_state)
             
             return state_changed and not has_progressive
-         except Exception as e:
-             _LOGGER.error(f"瞬时操作检测失败: {e}")
-             return True
+        except Exception as e:
+            _LOGGER.error(f"瞬时操作检测失败: {e}")
+            return True
     
     def _get_action_state(self, entity_id: str) -> str:
         """获取实体的动作状态"""
