@@ -2,8 +2,9 @@
 import asyncio
 import logging
 import time
+import inspect
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_STATE_CHANGED, EVENT_HOMEASSISTANT_STOP
@@ -35,6 +36,18 @@ class SimpleSyncCoordinator:
         self._sync_cooldown = 0.15  # 同步冷却时间（秒）- 优化为150ms
         self._state_cache = {}  # 状态缓存，用于去重和内存管理
         self._max_cache_size = 100  # 最大缓存大小，防止内存溢出
+        
+    def _validate_async_method(self, method: Callable, method_name: str) -> bool:
+        """验证方法是否为async方法，防止async/sync混用错误"""
+        try:
+            if inspect.iscoroutinefunction(method):
+                return True
+            else:
+                _LOGGER.error(f"方法类型错误: {method_name} 应该是async方法但实际是普通方法")
+                return False
+        except Exception as e:
+            _LOGGER.error(f"方法类型验证失败: {method_name} - {e}")
+            return False
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -118,7 +131,7 @@ class SimpleSyncCoordinator:
         # 如果1秒内同步次数超过5次，启用批量优化
         return len(recent_syncs) > 5
     
-    def _clean_state_cache(self):
+    async def _clean_state_cache(self):
         """清理状态缓存，防止内存溢出"""
         if len(self._state_cache) > self._max_cache_size:
             # 保留最近的一半缓存
@@ -306,8 +319,11 @@ class SimpleSyncCoordinator:
                 _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity1_id}")
                 return
             
-            # 定期清理状态缓存
-            await self._clean_state_cache()
+            # 清理状态缓存（带类型验证）
+            if self._validate_async_method(self._clean_state_cache, "_clean_state_cache"):
+                await self._clean_state_cache()
+            else:
+                _LOGGER.error("跳过状态缓存清理，方法类型验证失败")
             
             # 智能同步判断和冷却时间检查
             sync_key = f"{self.entity1_id}->{self.entity2_id}"
@@ -358,8 +374,11 @@ class SimpleSyncCoordinator:
                 _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity2_id}")
                 return
             
-            # 定期清理状态缓存
-            await self._clean_state_cache()
+            # 清理状态缓存（带类型验证）
+            if self._validate_async_method(self._clean_state_cache, "_clean_state_cache"):
+                await self._clean_state_cache()
+            else:
+                _LOGGER.error("跳过状态缓存清理，方法类型验证失败")
             
             # 智能同步判断和冷却时间检查
             sync_key = f"{self.entity2_id}->{self.entity1_id}"
