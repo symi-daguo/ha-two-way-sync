@@ -1,12 +1,12 @@
-"""Home Assistant 双向同步集成"""
+"""Home Assistant双向同步集成"""
 import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.const import EVENT_STATE_CHANGED, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, State
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.service import async_register_admin_service
@@ -30,9 +30,11 @@ class SimpleSyncCoordinator:
         self.enabled = config_entry.data.get("enabled", True)
         self._sync_in_progress = False
         self._unsubscribe_listeners = []
-        # 增强的死循环检测机制
+        # 增强的死循环检测机制和内存管理
         self._last_sync_times = {}  # 记录每个实体的最后同步时间
-        self._sync_cooldown = 0.2  # 同步冷却时间（秒）
+        self._sync_cooldown = 0.15  # 同步冷却时间（秒）- 优化为150ms
+        self._state_cache = {}  # 状态缓存，用于去重和内存管理
+        self._max_cache_size = 100  # 最大缓存大小，防止内存溢出
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -88,7 +90,7 @@ class SimpleSyncCoordinator:
         return False
     
     def _is_significant_change(self, new_state: State, old_state: State) -> bool:
-        """判断是否为有意义的状态变化"""
+        """智能同步判断：检查状态变化是否有意义"""
         if old_state is None:
             return True
         
@@ -103,6 +105,181 @@ class SimpleSyncCoordinator:
         # 检查last_changed时间，避免重复处理相同事件
         if new_state.last_changed == old_state.last_changed:
             return False
+        
+        return False
+    
+    def _should_batch_sync(self, entity_id: str) -> bool:
+        """判断是否应该进行批量同步优化"""
+        # 检查最近的同步频率
+        current_time = time.time()
+        recent_syncs = [t for t in self._last_sync_times.values() 
+                       if current_time - t < 1.0]  # 1秒内的同步次数
+        
+        # 如果1秒内同步次数超过5次，启用批量优化
+        return len(recent_syncs) > 5
+    
+    def _clean_state_cache(self):
+        """清理状态缓存，防止内存溢出"""
+        if len(self._state_cache) > self._max_cache_size:
+            # 保留最近的一半缓存
+            items = list(self._state_cache.items())
+            items.sort(key=lambda x: x[1].get('timestamp', 0))
+            keep_count = self._max_cache_size // 2
+            self._state_cache = dict(items[-keep_count:])
+            _LOGGER.debug(f"状态缓存已清理，保留 {keep_count} 个最新条目")
+    
+    def _validate_light_attributes(self, attributes):
+        """验证灯光属性的有效性"""
+        validated_attrs = {}
+        
+        # 验证亮度值 (0-255)
+        if "brightness" in attributes:
+            brightness = attributes["brightness"]
+            if isinstance(brightness, (int, float)) and 0 <= brightness <= 255:
+                validated_attrs["brightness"] = int(brightness)
+        
+        # 验证色温值 (通常在153-500之间)
+        if "color_temp" in attributes:
+            color_temp = attributes["color_temp"]
+            if isinstance(color_temp, (int, float)) and 153 <= color_temp <= 500:
+                validated_attrs["color_temp"] = int(color_temp)
+        
+        # 验证HS颜色值
+        if "hs_color" in attributes:
+            hs_color = attributes["hs_color"]
+            if (isinstance(hs_color, (list, tuple)) and len(hs_color) == 2 and
+                isinstance(hs_color[0], (int, float)) and isinstance(hs_color[1], (int, float)) and
+                0 <= hs_color[0] <= 360 and 0 <= hs_color[1] <= 100):
+                validated_attrs["hs_color"] = [float(hs_color[0]), float(hs_color[1])]
+        
+        # 验证RGB颜色值
+        if "rgb_color" in attributes:
+            rgb_color = attributes["rgb_color"]
+            if (isinstance(rgb_color, (list, tuple)) and len(rgb_color) == 3 and
+                all(isinstance(c, (int, float)) and 0 <= c <= 255 for c in rgb_color)):
+                validated_attrs["rgb_color"] = [int(c) for c in rgb_color]
+        
+        # 验证XY颜色值
+        if "xy_color" in attributes:
+            xy_color = attributes["xy_color"]
+            if (isinstance(xy_color, (list, tuple)) and len(xy_color) == 2 and
+                all(isinstance(c, (int, float)) and 0 <= c <= 1 for c in xy_color)):
+                validated_attrs["xy_color"] = [float(c) for c in xy_color]
+        
+        return validated_attrs
+    
+    async def _sync_light_attributes(self, source_state: State, target_entity_id: str):
+        """新的灯光属性同步函数，支持渐进式同步和智能属性处理"""
+        try:
+            # 验证并获取有效属性
+            validated_attrs = self._validate_light_attributes(source_state.attributes)
+            
+            if not validated_attrs:
+                # 如果没有有效属性，只进行基础开关同步
+                service_data = {"entity_id": target_entity_id}
+                await self.hass.services.async_call("light", "turn_on", service_data)
+                _LOGGER.debug(f"灯光基础开关同步: {target_entity_id}")
+                return
+            
+            # 渐进式同步策略：分步骤同步不同属性
+            await self._progressive_light_sync(target_entity_id, validated_attrs)
+            
+        except Exception as e:
+            _LOGGER.error(f"灯光属性同步失败: {target_entity_id} - {e}")
+            # 错误恢复：回退到基础同步
+            try:
+                service_data = {"entity_id": target_entity_id}
+                await self.hass.services.async_call("light", "turn_on", service_data)
+                _LOGGER.debug(f"灯光错误恢复同步: {target_entity_id}")
+            except Exception as recovery_err:
+                _LOGGER.error(f"灯光错误恢复失败: {target_entity_id} - {recovery_err}")
+    
+    async def _progressive_light_sync(self, target_entity_id: str, validated_attrs: dict):
+        """渐进式灯光同步：先同步关键属性，再同步次要属性"""
+        service_data = {"entity_id": target_entity_id}
+        
+        # 第一步：同步亮度（关键属性）
+        if "brightness" in validated_attrs:
+            brightness_data = service_data.copy()
+            brightness_data["brightness"] = validated_attrs["brightness"]
+            
+            try:
+                await self.hass.services.async_call("light", "turn_on", brightness_data)
+                _LOGGER.debug(f"亮度同步成功: {target_entity_id} = {validated_attrs['brightness']}")
+                # 短暂延迟确保状态稳定
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                _LOGGER.warning(f"亮度同步失败: {target_entity_id} - {e}")
+        
+        # 第二步：同步颜色属性（次要属性）
+        color_attrs = {}
+        
+        # 智能颜色属性选择：优先级 hs_color > rgb_color > xy_color > color_temp
+        if "hs_color" in validated_attrs:
+            color_attrs["hs_color"] = validated_attrs["hs_color"]
+        elif "rgb_color" in validated_attrs:
+            color_attrs["rgb_color"] = validated_attrs["rgb_color"]
+        elif "xy_color" in validated_attrs:
+            color_attrs["xy_color"] = validated_attrs["xy_color"]
+        elif "color_temp" in validated_attrs:
+            color_attrs["color_temp"] = validated_attrs["color_temp"]
+        
+        # 如果有颜色属性，进行颜色同步
+        if color_attrs:
+            color_data = service_data.copy()
+            color_data.update(color_attrs)
+            
+            try:
+                await self.hass.services.async_call("light", "turn_on", color_data)
+                _LOGGER.debug(f"颜色同步成功: {target_entity_id} = {color_attrs}")
+            except Exception as e:
+                _LOGGER.warning(f"颜色同步失败: {target_entity_id} - {e}")
+                
+                # 如果颜色同步失败，尝试单独同步色温
+                if "color_temp" in validated_attrs and "color_temp" not in color_attrs:
+                    try:
+                        temp_data = service_data.copy()
+                        temp_data["color_temp"] = validated_attrs["color_temp"]
+                        await self.hass.services.async_call("light", "turn_on", temp_data)
+                        _LOGGER.debug(f"色温恢复同步成功: {target_entity_id} = {validated_attrs['color_temp']}")
+                    except Exception as temp_err:
+                        _LOGGER.warning(f"色温恢复同步失败: {target_entity_id} - {temp_err}")
+    
+    def _is_duplicate_state(self, entity_id: str, state: State) -> bool:
+        """检查是否为重复状态，用于去重"""
+        cache_key = f"{entity_id}_{state.state}"
+        current_time = time.time()
+        
+        # 生成状态指纹（包含重要属性）
+        important_attrs = []
+        domain = state.domain
+        if domain == "light":
+            important_attrs = ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]
+        elif domain == "fan":
+            important_attrs = ["speed", "percentage", "preset_mode", "oscillating"]
+        elif domain == "climate":
+            important_attrs = ["temperature", "target_temp_high", "target_temp_low", "hvac_mode", "fan_mode"]
+        elif domain == "cover":
+            important_attrs = ["position", "tilt_position"]
+        
+        state_fingerprint = f"{state.state}_{hash(tuple(state.attributes.get(attr) for attr in important_attrs))}"
+        
+        if cache_key in self._state_cache:
+            cached_data = self._state_cache[cache_key]
+            # 如果状态指纹相同且时间间隔很短，认为是重复状态
+            if (cached_data.get('fingerprint') == state_fingerprint and 
+                current_time - cached_data.get('timestamp', 0) < 1.0):  # 1秒内的重复状态
+                return True
+        
+        # 更新缓存
+        self._state_cache[cache_key] = {
+            'fingerprint': state_fingerprint,
+            'timestamp': current_time
+        }
+        
+        # 定期清理缓存
+        if len(self._state_cache) > self._max_cache_size:
+            self._clean_state_cache()
         
         return False
     
@@ -124,14 +301,30 @@ class SimpleSyncCoordinator:
                 _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity1_id}")
                 return
             
-            # 检查冷却时间
+            # 检查是否为重复状态
+            if self._is_duplicate_state(self.entity1_id, new_state):
+                _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity1_id}")
+                return
+            
+            # 定期清理状态缓存
+            await self._clean_state_cache()
+            
+            # 智能同步判断和冷却时间检查
             sync_key = f"{self.entity1_id}->{self.entity2_id}"
             current_time = time.time()
             
+            # 批量同步优化
+            if self._should_batch_sync(self.entity1_id):
+                # 高频同步时增加冷却时间
+                effective_cooldown = self._sync_cooldown * 1.5
+                _LOGGER.debug(f"检测到高频同步，启用批量优化: {sync_key}")
+            else:
+                effective_cooldown = self._sync_cooldown
+            
             if sync_key in self._last_sync_times:
                 time_since_last = current_time - self._last_sync_times[sync_key]
-                if time_since_last < self._sync_cooldown:
-                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {self._sync_cooldown}s")
+                if time_since_last < effective_cooldown:
+                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
                     return
             
             # 记录同步时间
@@ -160,14 +353,30 @@ class SimpleSyncCoordinator:
                 _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity2_id}")
                 return
             
-            # 检查冷却时间
+            # 检查是否为重复状态
+            if self._is_duplicate_state(self.entity2_id, new_state):
+                _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity2_id}")
+                return
+            
+            # 定期清理状态缓存
+            await self._clean_state_cache()
+            
+            # 智能同步判断和冷却时间检查
             sync_key = f"{self.entity2_id}->{self.entity1_id}"
             current_time = time.time()
             
+            # 批量同步优化
+            if self._should_batch_sync(self.entity2_id):
+                # 高频同步时增加冷却时间
+                effective_cooldown = self._sync_cooldown * 1.5
+                _LOGGER.debug(f"检测到高频同步，启用批量优化: {sync_key}")
+            else:
+                effective_cooldown = self._sync_cooldown
+            
             if sync_key in self._last_sync_times:
                 time_since_last = current_time - self._last_sync_times[sync_key]
-                if time_since_last < self._sync_cooldown:
-                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {self._sync_cooldown}s")
+                if time_since_last < effective_cooldown:
+                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
                     return
             
             # 记录同步时间
@@ -241,45 +450,8 @@ class SimpleSyncCoordinator:
         try:
             if domain == "light":
                 if source_state.state == "on":
-                    # 同步亮度、颜色等属性，确保颜色属性互斥避免冲突
-                    attrs = {}
-                    
-                    # 添加亮度属性
-                    if "brightness" in source_state.attributes:
-                        attrs["brightness"] = source_state.attributes["brightness"]
-                    
-                    # 颜色属性互斥处理：优先级 hs_color > rgb_color > xy_color > color_temp
-                    # 只设置一种颜色属性，避免Home Assistant服务调用冲突
-                    color_set = False
-                    if "hs_color" in source_state.attributes and source_state.attributes["hs_color"]:
-                        attrs["hs_color"] = source_state.attributes["hs_color"]
-                        color_set = True
-                    elif "rgb_color" in source_state.attributes and source_state.attributes["rgb_color"]:
-                        attrs["rgb_color"] = source_state.attributes["rgb_color"]
-                        color_set = True
-                    elif "xy_color" in source_state.attributes and source_state.attributes["xy_color"]:
-                        attrs["xy_color"] = source_state.attributes["xy_color"]
-                        color_set = True
-                    elif "color_temp" in source_state.attributes and source_state.attributes["color_temp"]:
-                        # 只有在没有其他颜色属性时才设置色温
-                        attrs["color_temp"] = source_state.attributes["color_temp"]
-                        color_set = True
-                    
-                    # 如果没有颜色属性但有色温，单独设置色温
-                    if not color_set and "color_temp" in source_state.attributes:
-                        attrs["color_temp"] = source_state.attributes["color_temp"]
-                    
-                    service_data.update(attrs)
-                    _LOGGER.debug(f"灯光同步属性: {attrs}")
-                    
-                    try:
-                        await self.hass.services.async_call("light", "turn_on", service_data)
-                        _LOGGER.debug(f"灯光同步成功: {target_entity_id}")
-                    except Exception as light_err:
-                        _LOGGER.warning(f"灯光完整同步失败，尝试仅同步开关状态: {light_err}")
-                        # 回退到基础同步，只同步开关状态
-                        basic_service_data = {"entity_id": target_entity_id}
-                        await self.hass.services.async_call("light", "turn_on", basic_service_data)
+                    # 重新设计的灯光同步逻辑，支持亮度和色温独立同步
+                    await self._sync_light_attributes(source_state, target_entity_id)
                 else:
                     try:
                         await self.hass.services.async_call("light", "turn_off", service_data)
