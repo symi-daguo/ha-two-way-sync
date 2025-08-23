@@ -37,6 +37,31 @@ class SimpleSyncCoordinator:
         self._state_cache = {}  # 状态缓存，用于去重和内存管理
         self._max_cache_size = 100  # 最大缓存大小，防止内存溢出
         
+        # 步进设备管理
+        self._action_states = {}  # 动作状态跟踪 {entity_id: {state, start_time, master_entity, target_values}}
+        self._progressive_attributes = {
+            'light': ['brightness', 'color_temp', 'rgb_color', 'xy_color', 'hs_color'],
+            'cover': ['position', 'tilt_position'],
+            'climate': ['temperature', 'target_temp_high', 'target_temp_low'],
+            'fan': ['percentage', 'speed'],
+            'media_player': ['volume_level'],
+            'humidifier': ['humidity'],
+            'water_heater': ['temperature']
+        }
+        self._action_completion_timeout = config_entry.options.get(
+            "action_completion_timeout", 
+            config_entry.data.get("action_completion_timeout", 3.0)
+        )  # 动作完成检测超时时间
+        self._progressive_sync_mode = config_entry.options.get(
+            "progressive_sync_mode", 
+            config_entry.data.get("progressive_sync_mode", "smart")
+        )  # smart/realtime/master_slave
+        self._sync_mode = config_entry.options.get(
+            "sync_mode", 
+            config_entry.data.get("sync_mode", "perfect")
+        )  # perfect/basic
+        self._stability_check_interval = 0.5  # 属性值稳定性检查间隔（秒）
+        
     def _validate_async_method(self, method: Callable, method_name: str) -> bool:
         """验证方法是否为async方法，防止async/sync混用错误"""
         try:
@@ -48,6 +73,288 @@ class SimpleSyncCoordinator:
         except Exception as e:
             _LOGGER.error(f"方法类型验证失败: {method_name} - {e}")
             return False
+    
+    def _is_progressive_device(self, entity_id: str) -> bool:
+        """检测是否为步进设备（需要特殊同步处理的设备）"""
+        try:
+            state = self.hass.states.get(entity_id)
+            if not state:
+                return False
+            
+            domain = state.domain
+            return domain in self._progressive_attributes
+        except Exception as e:
+            _LOGGER.error(f"步进设备检测失败: {entity_id} - {e}")
+            return False
+    
+    def _get_progressive_attributes(self, entity_id: str) -> list:
+        """获取实体的步进属性列表"""
+        try:
+            state = self.hass.states.get(entity_id)
+            if not state:
+                return []
+            
+            domain = state.domain
+            return self._progressive_attributes.get(domain, [])
+        except Exception as e:
+            _LOGGER.error(f"获取步进属性失败: {entity_id} - {e}")
+            return []
+    
+    def _has_progressive_change(self, old_state, new_state) -> bool:
+        """检测是否包含步进属性的变化"""
+        try:
+            if not old_state or not new_state:
+                return False
+            
+            progressive_attrs = self._get_progressive_attributes(new_state.entity_id)
+            if not progressive_attrs:
+                return False
+            
+            # 检查步进属性是否有变化
+            for attr in progressive_attrs:
+                old_value = old_state.attributes.get(attr)
+                new_value = new_state.attributes.get(attr)
+                
+                if old_value != new_value:
+                    _LOGGER.debug(f"[PROGRESSIVE] 检测到步进属性变化: {new_state.entity_id}.{attr} {old_value} -> {new_value}")
+                    return True
+            
+            return False
+        except Exception as e:
+            _LOGGER.error(f"步进变化检测失败: {e}")
+            return False
+    
+    def _is_instant_operation(self, old_state, new_state) -> bool:
+        """检测是否为瞬时操作（如开关）"""
+        try:
+            if not old_state or not new_state:
+                return True
+            
+            # 只有状态变化，没有步进属性变化，认为是瞬时操作
+            state_changed = old_state.state != new_state.state
+            has_progressive = self._has_progressive_change(old_state, new_state)
+            
+            return state_changed and not has_progressive
+         except Exception as e:
+             _LOGGER.error(f"瞬时操作检测失败: {e}")
+             return True
+    
+    def _get_action_state(self, entity_id: str) -> str:
+        """获取实体的动作状态"""
+        return self._action_states.get(entity_id, {}).get('state', 'idle')
+    
+    def _set_action_state(self, entity_id: str, state: str, master_entity: str = None, target_values: dict = None):
+        """设置实体的动作状态"""
+        import time
+        
+        if entity_id not in self._action_states:
+            self._action_states[entity_id] = {}
+        
+        self._action_states[entity_id].update({
+            'state': state,
+            'start_time': time.time(),
+            'master_entity': master_entity,
+            'target_values': target_values or {}
+        })
+        
+        _LOGGER.debug(f"[ACTION_STATE] {entity_id} 状态变更: {state}, 主控: {master_entity}")
+    
+    def _clear_action_state(self, entity_id: str):
+        """清除实体的动作状态"""
+        if entity_id in self._action_states:
+            del self._action_states[entity_id]
+            _LOGGER.debug(f"[ACTION_STATE] {entity_id} 状态已清除")
+    
+    def _is_action_in_progress(self, entity_id: str) -> bool:
+        """检查实体是否正在执行动作"""
+        state = self._get_action_state(entity_id)
+        return state in ['starting', 'in_progress']
+    
+    def _is_action_timeout(self, entity_id: str) -> bool:
+        """检查动作是否超时"""
+        import time
+        
+        action_info = self._action_states.get(entity_id)
+        if not action_info:
+            return False
+        
+        elapsed = time.time() - action_info.get('start_time', 0)
+        return elapsed > self._action_completion_timeout
+    
+    def _get_master_entity(self, entity_id: str) -> str:
+        """获取实体的主控设备"""
+        return self._action_states.get(entity_id, {}).get('master_entity')
+    
+    def _is_slave_entity(self, entity_id: str, other_entity_id: str) -> bool:
+        """检查实体是否为从设备"""
+        master = self._get_master_entity(entity_id)
+        return master == other_entity_id
+    
+    async def _start_progressive_action(self, entity_id: str, target_state, master_entity: str = None):
+        """开始步进动作"""
+        try:
+            # 提取目标值
+            target_values = {}
+            progressive_attrs = self._get_progressive_attributes(entity_id)
+            
+            for attr in progressive_attrs:
+                if hasattr(target_state, 'attributes') and attr in target_state.attributes:
+                    target_values[attr] = target_state.attributes[attr]
+            
+            # 设置动作状态
+            self._set_action_state(
+                entity_id, 
+                'starting', 
+                master_entity or entity_id,
+                target_values
+            )
+            
+            _LOGGER.info(f"[PROGRESSIVE] 开始步进动作: {entity_id}, 目标值: {target_values}, 主控: {master_entity or entity_id}")
+            
+        except Exception as e:
+            _LOGGER.error(f"开始步进动作失败: {entity_id} - {e}")
+    
+    async def _update_action_progress(self, entity_id: str, current_state):
+        """更新动作进度"""
+        try:
+            action_info = self._action_states.get(entity_id)
+            if not action_info:
+                return
+            
+            current_state_name = action_info.get('state')
+            if current_state_name == 'starting':
+                # 从starting转换到in_progress
+                self._set_action_state(
+                    entity_id,
+                    'in_progress',
+                    action_info.get('master_entity'),
+                    action_info.get('target_values')
+                )
+                _LOGGER.debug(f"[PROGRESSIVE] {entity_id} 动作进行中")
+            
+        except Exception as e:
+            _LOGGER.error(f"更新动作进度失败: {entity_id} - {e}")
+    
+    async def _handle_progressive_sync(self, source_entity_id: str, target_entity_id: str, new_state: State, old_state: State):
+        """处理步进设备的主从同步逻辑"""
+        try:
+            _LOGGER.debug(f"[PROGRESSIVE] 开始处理步进同步: {source_entity_id} -> {target_entity_id}")
+            
+            # 检查目标设备是否正在执行动作
+            if self._is_action_in_progress(target_entity_id):
+                _LOGGER.debug(f"[PROGRESSIVE] 目标设备正在执行动作，跳过同步: {target_entity_id}")
+                return
+            
+            # 确定主从关系 - 源实体为主控设备
+            master_entity = source_entity_id
+            slave_entity = target_entity_id
+            
+            _LOGGER.debug(f"[PROGRESSIVE] 主从关系确定: 主控={master_entity}, 从设备={slave_entity}")
+            
+            # 获取步进属性的目标值
+            progressive_attrs = self._get_progressive_attributes(new_state.domain)
+            target_values = {}
+            for attr in progressive_attrs:
+                if attr in new_state.attributes:
+                    target_values[attr] = new_state.attributes[attr]
+            
+            # 启动主控设备的步进动作
+            await self._start_progressive_action(master_entity, new_state, master_entity)
+            
+            # 设置同步进行标志
+            self._sync_in_progress = True
+            
+            # 立即同步到从设备
+            await self._sync_to_entity(new_state, slave_entity)
+            
+            # 启动从设备的动作状态跟踪
+            await self._start_progressive_action(slave_entity, new_state, master_entity)
+            
+            # 启动动作完成检测
+            self.hass.async_create_task(
+                self._monitor_action_completion(master_entity, slave_entity, target_values)
+            )
+            
+            _LOGGER.debug(f"[PROGRESSIVE] 步进同步启动完成: {master_entity} -> {slave_entity}")
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 步进同步处理失败: {source_entity_id} -> {target_entity_id} - {e}")
+            self._sync_in_progress = False
+    
+    async def _monitor_action_completion(self, master_entity: str, slave_entity: str, target_values: dict):
+        """监控动作完成状态"""
+        try:
+            _LOGGER.debug(f"[PROGRESSIVE] 开始监控动作完成: {master_entity}, {slave_entity}")
+            
+            # 等待动作完成检测超时时间
+            timeout = self._action_completion_timeout
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout:
+                # 检查主控设备动作是否完成
+                master_completed = await self._check_action_stability(master_entity, target_values)
+                slave_completed = await self._check_action_stability(slave_entity, target_values)
+                
+                if master_completed and slave_completed:
+                    _LOGGER.debug(f"[PROGRESSIVE] 动作完成检测: 主控和从设备都已稳定")
+                    break
+                
+                # 等待一段时间再检查
+                await asyncio.sleep(self._stability_check_interval)
+            
+            # 执行最终确认同步
+            await self._perform_final_confirmation(master_entity, slave_entity)
+            
+            # 清理动作状态
+            self._clear_action_state(master_entity)
+            self._clear_action_state(slave_entity)
+            self._sync_in_progress = False
+            
+            _LOGGER.debug(f"[PROGRESSIVE] 动作完成监控结束: {master_entity}, {slave_entity}")
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 动作完成监控失败: {master_entity}, {slave_entity} - {e}")
+            self._sync_in_progress = False
+    
+    async def _check_action_stability(self, entity_id: str, target_values: dict) -> bool:
+        """检查动作稳定性"""
+        try:
+            state = self.hass.states.get(entity_id)
+            if not state:
+                return False
+            
+            # 检查目标值是否达到
+            for attr, target_value in target_values.items():
+                current_value = state.attributes.get(attr)
+                if current_value is None:
+                    continue
+                
+                # 对于数值类型，允许小的误差
+                if isinstance(target_value, (int, float)) and isinstance(current_value, (int, float)):
+                    if abs(current_value - target_value) > 1:  # 允许1的误差
+                        return False
+                elif current_value != target_value:
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 检查动作稳定性失败: {entity_id} - {e}")
+            return False
+    
+    async def _perform_final_confirmation(self, master_entity: str, slave_entity: str):
+        """执行最终确认同步"""
+        try:
+            _LOGGER.debug(f"[PROGRESSIVE] 执行最终确认同步: {master_entity} -> {slave_entity}")
+            
+            master_state = self.hass.states.get(master_entity)
+            if master_state:
+                # 最终确认同步，确保两个设备状态一致
+                await self._sync_to_entity(master_state, slave_entity)
+                _LOGGER.debug(f"[PROGRESSIVE] 最终确认同步完成: {master_entity} -> {slave_entity}")
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 最终确认同步失败: {master_entity} -> {slave_entity} - {e}")
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -503,6 +810,20 @@ class SimpleSyncCoordinator:
                 _LOGGER.warning(f"[DEBUG] 状态变化事件数据不完整，跳过同步: new_state={new_state}, old_state={old_state}")
                 return
             
+            # 检查是否为步进设备
+            is_progressive = self._is_progressive_device(new_state.entity_id)
+            _LOGGER.info(f"[DEBUG] 步进设备检测: {is_progressive}")
+            
+            # 根据配置的同步模式决定是否启用主从同步
+            if (is_progressive and self._has_progressive_change(old_state, new_state) and 
+                self._progressive_sync_mode in ['smart', 'master_slave']):
+                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用主从同步模式: {self.entity1_id} (模式: {self._progressive_sync_mode})")
+                await self._handle_progressive_sync(self.entity1_id, self.entity2_id, new_state, old_state)
+                return
+            elif self._progressive_sync_mode == 'realtime':
+                _LOGGER.info(f"[DEBUG] 实时模式，跳过主从同步逻辑: {self.entity1_id}")
+                # 继续执行传统的实时同步逻辑
+            
             # 使用精确的变化检测
             is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
             _LOGGER.info(f"[DEBUG] 状态变化检测结果: {is_significant}, {old_state.state}->{new_state.state}")
@@ -578,6 +899,20 @@ class SimpleSyncCoordinator:
             if not new_state or not old_state:
                 _LOGGER.warning(f"[DEBUG] 状态变化事件数据不完整，跳过同步: new_state={new_state}, old_state={old_state}")
                 return
+            
+            # 检查是否为步进设备
+            is_progressive = self._is_progressive_device(new_state.entity_id)
+            _LOGGER.info(f"[DEBUG] 步进设备检测: {is_progressive}")
+            
+            # 根据配置的同步模式决定是否启用主从同步
+            if (is_progressive and self._has_progressive_change(old_state, new_state) and 
+                self._progressive_sync_mode in ['smart', 'master_slave']):
+                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用主从同步模式: {self.entity2_id} (模式: {self._progressive_sync_mode})")
+                await self._handle_progressive_sync(self.entity2_id, self.entity1_id, new_state, old_state)
+                return
+            elif self._progressive_sync_mode == 'realtime':
+                _LOGGER.info(f"[DEBUG] 实时模式，跳过主从同步逻辑: {self.entity2_id}")
+                # 继续执行传统的实时同步逻辑
             
             # 使用精确的变化检测
             is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
