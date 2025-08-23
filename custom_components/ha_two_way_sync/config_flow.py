@@ -53,13 +53,13 @@ class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "entity1": entity1,
                             "entity2": entity2,
                             "enabled": user_input.get("enabled", True),
-                            "sync_mode": user_input.get("sync_mode", "perfect"),
-                            "progressive_sync_mode": user_input.get("progressive_sync_mode", "smart"),
-                            "action_completion_timeout": user_input.get("action_completion_timeout", 3.0),
+                            "sync_mode": "perfect",  # 固定使用完美同步
+                            "progressive_sync_mode": "smart",  # 固定使用智能主从同步
+                            "action_completion_timeout": 3.0,  # 固定超时时间
                         }
                     )
         
-        # 构建配置表单
+        # 构建简化的配置表单
         data_schema = vol.Schema({
             vol.Required("entity1"): selector.EntitySelector(
                 selector.EntitySelectorConfig(
@@ -82,34 +82,6 @@ class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             ),
             vol.Optional("enabled", default=True): selector.BooleanSelector(),
-            vol.Optional("sync_mode", default="perfect"): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "perfect", "label": "完美同步（同步所有属性）"},
-                        {"value": "basic", "label": "基础同步（仅开关状态）"}
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Optional("progressive_sync_mode", default="smart"): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "smart", "label": "智能模式（自动检测步进设备）"},
-                        {"value": "realtime", "label": "实时模式（传统实时同步）"},
-                        {"value": "master_slave", "label": "主从模式（强制主从同步）"}
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Optional("action_completion_timeout", default=3.0): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=1.0,
-                    max=10.0,
-                    step=0.5,
-                    unit_of_measurement="秒",
-                    mode=selector.NumberSelectorMode.BOX
-                )
-            ),
         })
         
         return self.async_show_form(
@@ -144,6 +116,7 @@ class TwoWaySyncOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
         
+        # 简化的选项配置
         data_schema = vol.Schema({
             vol.Optional(
                 "enabled",
@@ -151,49 +124,6 @@ class TwoWaySyncOptionsFlow(config_entries.OptionsFlow):
                     "enabled", self.config_entry.data.get("enabled", True)
                 )
             ): selector.BooleanSelector(),
-            vol.Optional(
-                "sync_mode",
-                default=self.config_entry.options.get(
-                    "sync_mode", self.config_entry.data.get("sync_mode", "perfect")
-                )
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "perfect", "label": "完美同步（同步所有属性）"},
-                        {"value": "basic", "label": "基础同步（仅开关状态）"}
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Optional(
-                "progressive_sync_mode",
-                default=self.config_entry.options.get(
-                    "progressive_sync_mode", self.config_entry.data.get("progressive_sync_mode", "smart")
-                )
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": "smart", "label": "智能模式（自动检测步进设备）"},
-                        {"value": "realtime", "label": "实时模式（传统实时同步）"},
-                        {"value": "master_slave", "label": "主从模式（强制主从同步）"}
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Optional(
-                "action_completion_timeout",
-                default=self.config_entry.options.get(
-                    "action_completion_timeout", self.config_entry.data.get("action_completion_timeout", 3.0)
-                )
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=1.0,
-                    max=10.0,
-                    step=0.5,
-                    unit_of_measurement="秒",
-                    mode=selector.NumberSelectorMode.BOX
-                )
-            ),
         })
         
         return self.async_show_form(

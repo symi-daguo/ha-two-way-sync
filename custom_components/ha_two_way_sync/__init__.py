@@ -232,84 +232,87 @@ class SimpleSyncCoordinator:
             _LOGGER.error(f"更新动作进度失败: {entity_id} - {e}")
     
     async def _handle_progressive_sync(self, source_entity_id: str, target_entity_id: str, new_state: State, old_state: State):
-        """处理步进设备的主从同步逻辑"""
+        """处理步进设备的主从同步逻辑 - 优化支持快速连续操作"""
         try:
-            _LOGGER.debug(f"[PROGRESSIVE] 开始处理步进同步: {source_entity_id} -> {target_entity_id}")
+            _LOGGER.info(f"[PROGRESSIVE] 开始智能主从同步: {source_entity_id} -> {target_entity_id}")
             
-            # 检查目标设备是否正在执行动作
-            if self._is_action_in_progress(target_entity_id):
-                _LOGGER.debug(f"[PROGRESSIVE] 目标设备正在执行动作，跳过同步: {target_entity_id}")
-                return
-            
-            # 确定主从关系 - 源实体为主控设备
+            # 主动触发的设备自动成为主控设备
             master_entity = source_entity_id
             slave_entity = target_entity_id
             
-            _LOGGER.debug(f"[PROGRESSIVE] 主从关系确定: 主控={master_entity}, 从设备={slave_entity}")
+            _LOGGER.info(f"[PROGRESSIVE] 主从关系确定: 主控={master_entity} (主动触发), 从设备={slave_entity}")
             
-            # 获取步进属性的目标值
-            progressive_attrs = self._get_progressive_attributes(new_state.domain)
-            target_values = {}
-            for attr in progressive_attrs:
-                if attr in new_state.attributes:
-                    target_values[attr] = new_state.attributes[attr]
+            # 获取目标状态值
+            target_values = {
+                'state': new_state.state,
+                'attributes': dict(new_state.attributes)
+            }
             
-            # 启动主控设备的步进动作
-            await self._start_progressive_action(master_entity, new_state, master_entity)
+            # 如果有其他同步正在进行，取消它们（支持快速连续操作）
+            if hasattr(self, '_current_sync_task') and self._current_sync_task and not self._current_sync_task.done():
+                _LOGGER.info(f"[PROGRESSIVE] 取消之前的同步任务，支持快速连续操作")
+                self._current_sync_task.cancel()
+            
+            # 立即同步到从设备（从设备立即响应）
+            _LOGGER.info(f"[PROGRESSIVE] 从设备立即响应: {slave_entity}")
+            await self._sync_to_entity(new_state, slave_entity)
+            
+            # 启动动作完成监控任务
+            self._current_sync_task = self.hass.async_create_task(
+                self._monitor_action_completion_optimized(master_entity, slave_entity, target_values)
+            )
+            
+            _LOGGER.info(f"[PROGRESSIVE] 智能主从同步启动完成: {master_entity} -> {slave_entity}")
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 智能主从同步失败: {source_entity_id} -> {target_entity_id} - {e}")
+            self._sync_in_progress = False
+    
+    async def _monitor_action_completion_optimized(self, master_entity: str, slave_entity: str, target_values: dict):
+        """优化的动作完成监控 - 支持快速连续操作"""
+        try:
+            _LOGGER.info(f"[PROGRESSIVE] 开始监控动作完成: 主控={master_entity}, 从设备={slave_entity}")
             
             # 设置同步进行标志
             self._sync_in_progress = True
             
-            # 立即同步到从设备
-            await self._sync_to_entity(new_state, slave_entity)
-            
-            # 启动从设备的动作状态跟踪
-            await self._start_progressive_action(slave_entity, new_state, master_entity)
-            
-            # 启动动作完成检测
-            self.hass.async_create_task(
-                self._monitor_action_completion(master_entity, slave_entity, target_values)
-            )
-            
-            _LOGGER.debug(f"[PROGRESSIVE] 步进同步启动完成: {master_entity} -> {slave_entity}")
-            
-        except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 步进同步处理失败: {source_entity_id} -> {target_entity_id} - {e}")
-            self._sync_in_progress = False
-    
-    async def _monitor_action_completion(self, master_entity: str, slave_entity: str, target_values: dict):
-        """监控动作完成状态"""
-        try:
-            _LOGGER.debug(f"[PROGRESSIVE] 开始监控动作完成: {master_entity}, {slave_entity}")
-            
             # 等待动作完成检测超时时间
             timeout = self._action_completion_timeout
             start_time = time.time()
+            check_interval = 0.1  # 更频繁的检查间隔
             
             while time.time() - start_time < timeout:
-                # 检查主控设备动作是否完成
-                master_completed = await self._check_action_stability(master_entity, target_values)
-                slave_completed = await self._check_action_stability(slave_entity, target_values)
-                
-                if master_completed and slave_completed:
-                    _LOGGER.debug(f"[PROGRESSIVE] 动作完成检测: 主控和从设备都已稳定")
-                    break
-                
-                # 等待一段时间再检查
-                await asyncio.sleep(self._stability_check_interval)
+                try:
+                    # 检查主控设备和从设备状态是否稳定
+                    master_state = self.hass.states.get(master_entity)
+                    slave_state = self.hass.states.get(slave_entity)
+                    
+                    if master_state and slave_state:
+                        # 检查状态是否达到目标值
+                        master_stable = self._check_state_stability(master_state, target_values)
+                        slave_stable = self._check_state_stability(slave_state, target_values)
+                        
+                        if master_stable and slave_stable:
+                            _LOGGER.info(f"[PROGRESSIVE] 动作完成: 主控和从设备都已达到目标状态")
+                            break
+                    
+                    # 等待一段时间再检查
+                    await asyncio.sleep(check_interval)
+                    
+                except asyncio.CancelledError:
+                    _LOGGER.info(f"[PROGRESSIVE] 动作监控被取消（支持快速连续操作）")
+                    return
             
-            # 执行最终确认同步
-            await self._perform_final_confirmation(master_entity, slave_entity)
+            # 执行最终状态同步（以主控设备状态为准）
+            await self._perform_final_sync(master_entity, slave_entity)
             
-            # 清理动作状态
-            self._clear_action_state(master_entity)
-            self._clear_action_state(slave_entity)
-            self._sync_in_progress = False
+            _LOGGER.info(f"[PROGRESSIVE] 动作完成监控结束: {master_entity} -> {slave_entity}")
             
-            _LOGGER.debug(f"[PROGRESSIVE] 动作完成监控结束: {master_entity}, {slave_entity}")
-            
+        except asyncio.CancelledError:
+            _LOGGER.info(f"[PROGRESSIVE] 动作监控被取消")
         except Exception as e:
             _LOGGER.error(f"[PROGRESSIVE] 动作完成监控失败: {master_entity}, {slave_entity} - {e}")
+        finally:
             self._sync_in_progress = False
     
     async def _check_action_stability(self, entity_id: str, target_values: dict) -> bool:
@@ -337,6 +340,56 @@ class SimpleSyncCoordinator:
         except Exception as e:
             _LOGGER.error(f"[PROGRESSIVE] 检查动作稳定性失败: {entity_id} - {e}")
             return False
+    
+    def _check_state_stability(self, current_state: State, target_values: dict) -> bool:
+        """检查设备状态是否稳定并达到目标值"""
+        try:
+            # 检查基本状态
+            if current_state.state != target_values.get('state'):
+                return False
+            
+            # 检查关键属性
+            target_attrs = target_values.get('attributes', {})
+            current_attrs = current_state.attributes
+            
+            # 检查亮度
+            if 'brightness' in target_attrs:
+                target_brightness = target_attrs['brightness']
+                current_brightness = current_attrs.get('brightness')
+                if abs((current_brightness or 0) - target_brightness) > 5:  # 允许5的误差
+                    return False
+            
+            # 检查色温
+            if 'color_temp' in target_attrs:
+                target_temp = target_attrs['color_temp']
+                current_temp = current_attrs.get('color_temp')
+                if abs((current_temp or 0) - target_temp) > 10:  # 允许10的误差
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            _LOGGER.warning(f"状态稳定性检查失败: {e}")
+            return False
+    
+    async def _perform_final_sync(self, master_entity: str, slave_entity: str):
+        """执行最终状态同步（以主控设备状态为准）"""
+        try:
+            _LOGGER.info(f"[PROGRESSIVE] 执行最终状态同步: {master_entity} -> {slave_entity}")
+            
+            # 获取主控设备的最终状态
+            master_state = self.hass.states.get(master_entity)
+            if not master_state:
+                _LOGGER.warning(f"[PROGRESSIVE] 无法获取主控设备状态: {master_entity}")
+                return
+            
+            # 同步到从设备（以主控设备状态为准）
+            await self._sync_to_entity(master_state, slave_entity)
+            
+            _LOGGER.info(f"[PROGRESSIVE] 最终状态同步完成: {master_entity} -> {slave_entity}")
+            
+        except Exception as e:
+            _LOGGER.error(f"[PROGRESSIVE] 最终状态同步失败: {master_entity} -> {slave_entity} - {e}")
     
     async def _perform_final_confirmation(self, master_entity: str, slave_entity: str):
         """执行最终确认同步"""
@@ -640,11 +693,14 @@ class SimpleSyncCoordinator:
             if isinstance(brightness, (int, float)) and 0 <= brightness <= 255:
                 validated_attrs["brightness"] = int(brightness)
         
-        # 验证色温值 (通常在153-500之间)
+        # 验证色温值 (扩大范围以支持更多设备，通常在100-1000之间)
         if "color_temp" in attributes:
             color_temp = attributes["color_temp"]
-            if isinstance(color_temp, (int, float)) and 153 <= color_temp <= 500:
+            if isinstance(color_temp, (int, float)) and 100 <= color_temp <= 1000:
                 validated_attrs["color_temp"] = int(color_temp)
+                _LOGGER.debug(f"色温验证通过: {color_temp}")
+            else:
+                _LOGGER.warning(f"色温值超出范围: {color_temp} (有效范围: 100-1000)")
         
         # 验证HS颜色值
         if "hs_color" in attributes:
@@ -738,14 +794,42 @@ class SimpleSyncCoordinator:
                 _LOGGER.warning(f"颜色同步失败: {target_entity_id} - {e}")
                 
                 # 如果颜色同步失败，尝试单独同步色温
-                if "color_temp" in validated_attrs and "color_temp" not in color_attrs:
-                    try:
-                        temp_data = service_data.copy()
-                        temp_data["color_temp"] = validated_attrs["color_temp"]
-                        await self.hass.services.async_call("light", "turn_on", temp_data)
-                        _LOGGER.debug(f"色温恢复同步成功: {target_entity_id} = {validated_attrs['color_temp']}")
-                    except Exception as temp_err:
-                        _LOGGER.warning(f"色温恢复同步失败: {target_entity_id} - {temp_err}")
+                if "color_temp" in validated_attrs:
+                    await self._sync_color_temperature(target_entity_id, validated_attrs["color_temp"], service_data)
+    
+    async def _sync_color_temperature(self, target_entity_id: str, color_temp: int, base_service_data: dict):
+        """专门的色温同步函数，支持多种色温参数格式"""
+        try:
+            # 方法1：使用color_temp参数
+            temp_data = base_service_data.copy()
+            temp_data["color_temp"] = color_temp
+            await self.hass.services.async_call("light", "turn_on", temp_data)
+            _LOGGER.info(f"色温同步成功 (color_temp): {target_entity_id} = {color_temp}")
+            return True
+        except Exception as temp_err:
+            _LOGGER.warning(f"色温同步失败 (color_temp): {target_entity_id} - {temp_err}")
+            
+            # 方法2：尝试使用kelvin参数
+            try:
+                kelvin_value = int(1000000 / color_temp)
+                kelvin_data = base_service_data.copy()
+                kelvin_data["kelvin"] = kelvin_value
+                await self.hass.services.async_call("light", "turn_on", kelvin_data)
+                _LOGGER.info(f"色温同步成功 (kelvin): {target_entity_id} = {kelvin_value}K")
+                return True
+            except Exception as kelvin_err:
+                _LOGGER.warning(f"色温同步失败 (kelvin): {target_entity_id} - {kelvin_err}")
+                
+                # 方法3：尝试使用color_temp_kelvin参数
+                try:
+                    kelvin_data = base_service_data.copy()
+                    kelvin_data["color_temp_kelvin"] = kelvin_value
+                    await self.hass.services.async_call("light", "turn_on", kelvin_data)
+                    _LOGGER.info(f"色温同步成功 (color_temp_kelvin): {target_entity_id} = {kelvin_value}K")
+                    return True
+                except Exception as kelvin_temp_err:
+                    _LOGGER.error(f"所有色温同步方法均失败: {target_entity_id} - {kelvin_temp_err}")
+                    return False
     
     def _is_duplicate_state(self, entity_id: str, state: State) -> bool:
         """检查是否为重复状态，用于去重"""
