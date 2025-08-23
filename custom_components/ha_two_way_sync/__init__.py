@@ -261,8 +261,8 @@ class SimpleSyncCoordinator:
             _LOGGER.info(f"[PROGRESSIVE] 从设备立即执行主控设备的最新目标值: {slave_entity}")
             _LOGGER.info(f"[PROGRESSIVE] 目标状态: {new_state.state}, 属性: {dict(new_state.attributes)}")
             
-            # 创建新的同步任务
-            sync_task = asyncio.create_task(self._sync_to_entity(new_state, slave_entity))
+            # 创建新的立即同步任务
+            sync_task = asyncio.create_task(self._immediate_sync(new_state, slave_entity))
             self._progressive_sync_tasks[sync_key].append(sync_task)
             
             # 等待同步完成（立即执行）
@@ -925,6 +925,73 @@ class SimpleSyncCoordinator:
             await self._sync_to_entity(new_state, self.entity1_id)
         except Exception as err:
             _LOGGER.error(f"处理实体2状态变化事件时发生错误: {err}", exc_info=True)
+    
+    async def _immediate_sync(self, source_state: State, target_entity_id: str):
+        """立即同步方法 - 专门用于步进设备，一次性同步所有属性，无延迟"""
+        try:
+            # 类型检查：确保source_state是State对象
+            if not hasattr(source_state, 'domain') or not hasattr(source_state, 'entity_id'):
+                _LOGGER.error(f"参数错误：source_state必须是State对象，实际类型: {type(source_state)}")
+                return
+            
+            # 检查目标实体是否存在
+            target_state = self.hass.states.get(target_entity_id)
+            if not target_state:
+                _LOGGER.error(f"目标实体 {target_entity_id} 不存在，无法同步")
+                return
+                
+            source_domain = source_state.domain
+            target_domain = target_entity_id.split(".")[0]
+            
+            _LOGGER.debug(f"开始立即同步: {source_state.entity_id}({source_domain}) -> {target_entity_id}({target_domain})")
+            
+            service_data = {"entity_id": target_entity_id}
+            
+            if source_domain == "light":
+                if source_state.state == "on":
+                    # 立即同步所有灯光属性，一次性传递，无延迟
+                    validated_attrs = self._validate_light_attributes(source_state.attributes)
+                    if validated_attrs:
+                        service_data.update(validated_attrs)
+                    await self.hass.services.async_call("light", "turn_on", service_data)
+                    _LOGGER.debug(f"灯光立即同步成功: {target_entity_id} = {service_data}")
+                else:
+                    await self.hass.services.async_call("light", "turn_off", service_data)
+                    _LOGGER.debug(f"灯光关闭立即同步成功: {target_entity_id}")
+            elif source_domain == "switch":
+                service = "turn_on" if source_state.state == "on" else "turn_off"
+                await self.hass.services.async_call("switch", service, service_data)
+            elif source_domain == "cover":
+                if source_state.state == "open":
+                    await self.hass.services.async_call("cover", "open_cover", service_data)
+                elif source_state.state == "closed":
+                    await self.hass.services.async_call("cover", "close_cover", service_data)
+                elif "position" in source_state.attributes:
+                    service_data["position"] = source_state.attributes["position"]
+                    await self.hass.services.async_call("cover", "set_cover_position", service_data)
+            elif source_domain == "fan":
+                if source_state.state == "on":
+                    attrs = {k: v for k, v in source_state.attributes.items() 
+                            if k in ["speed", "percentage", "preset_mode", "oscillating"]}
+                    service_data.update(attrs)
+                    await self.hass.services.async_call("fan", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("fan", "turn_off", service_data)
+            else:
+                # 对于其他类型，使用基础同步
+                is_on = source_state.state in ["on", "open", "playing", "cleaning", "heating", "cooling", "auto", "heat", "cool"]
+                if target_domain in ["light", "switch", "fan", "humidifier", "input_boolean"]:
+                    service = "turn_on" if is_on else "turn_off"
+                    await self.hass.services.async_call(target_domain, service, service_data)
+                    
+            _LOGGER.info(f"立即同步完成: {source_state.entity_id} -> {target_entity_id}")
+                
+        except ServiceNotFound as err:
+            _LOGGER.error(f"立即同步失败，服务不存在: {err}")
+        except HomeAssistantError as err:
+            _LOGGER.error(f"立即同步失败，Home Assistant错误: {err}")
+        except Exception as err:
+            _LOGGER.error(f"立即同步过程中发生未知错误: {err}", exc_info=True)
     
     async def _sync_to_entity(self, source_state: State, target_entity_id: str):
         """同步状态到目标实体"""
