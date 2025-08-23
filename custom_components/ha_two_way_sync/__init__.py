@@ -949,10 +949,24 @@ class SimpleSyncCoordinator:
             
             if source_domain == "light":
                 if source_state.state == "on":
-                    # 立即同步所有灯光属性，一次性传递，无延迟
+                    # 立即同步灯光属性，使用智能颜色属性选择避免冲突
                     validated_attrs = self._validate_light_attributes(source_state.attributes)
                     if validated_attrs:
-                        service_data.update(validated_attrs)
+                        # 添加亮度属性
+                        if "brightness" in validated_attrs:
+                            service_data["brightness"] = validated_attrs["brightness"]
+                        
+                        # 智能颜色属性选择：优先级 hs_color > rgb_color > xy_color > color_temp
+                        # 只选择一个颜色属性，避免冲突
+                        if "hs_color" in validated_attrs:
+                            service_data["hs_color"] = validated_attrs["hs_color"]
+                        elif "rgb_color" in validated_attrs:
+                            service_data["rgb_color"] = validated_attrs["rgb_color"]
+                        elif "xy_color" in validated_attrs:
+                            service_data["xy_color"] = validated_attrs["xy_color"]
+                        elif "color_temp" in validated_attrs:
+                            service_data["color_temp"] = validated_attrs["color_temp"]
+                    
                     await self.hass.services.async_call("light", "turn_on", service_data)
                     _LOGGER.debug(f"灯光立即同步成功: {target_entity_id} = {service_data}")
                 else:
