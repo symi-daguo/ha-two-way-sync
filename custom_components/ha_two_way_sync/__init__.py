@@ -232,9 +232,9 @@ class SimpleSyncCoordinator:
             _LOGGER.error(f"更新动作进度失败: {entity_id} - {e}")
     
     async def _handle_progressive_sync(self, source_entity_id: str, target_entity_id: str, new_state: State, old_state: State):
-        """处理步进设备的主从同步逻辑 - 优化支持快速连续操作"""
+        """处理步进设备的立即同步逻辑 - 主动触发设备为主控，从设备立即执行最新操作"""
         try:
-            _LOGGER.info(f"[PROGRESSIVE] 开始智能主从同步: {source_entity_id} -> {target_entity_id}")
+            _LOGGER.info(f"[PROGRESSIVE] 开始立即同步: {source_entity_id} -> {target_entity_id}")
             
             # 主动触发的设备自动成为主控设备
             master_entity = source_entity_id
@@ -242,168 +242,53 @@ class SimpleSyncCoordinator:
             
             _LOGGER.info(f"[PROGRESSIVE] 主从关系确定: 主控={master_entity} (主动触发), 从设备={slave_entity}")
             
-            # 获取目标状态值
-            target_values = {
-                'state': new_state.state,
-                'attributes': dict(new_state.attributes)
-            }
+            # 取消所有之前的同步任务（支持快速连续操作）
+            sync_key = f"{master_entity}->{slave_entity}"
+            if not hasattr(self, '_progressive_sync_tasks'):
+                self._progressive_sync_tasks = {}
             
-            # 如果有其他同步正在进行，取消它们（支持快速连续操作）
-            if hasattr(self, '_current_sync_task') and self._current_sync_task and not self._current_sync_task.done():
-                _LOGGER.info(f"[PROGRESSIVE] 取消之前的同步任务，支持快速连续操作")
-                self._current_sync_task.cancel()
+            # 取消该同步对的所有之前任务
+            if sync_key in self._progressive_sync_tasks:
+                for task in self._progressive_sync_tasks[sync_key]:
+                    if not task.done():
+                        _LOGGER.info(f"[PROGRESSIVE] 取消之前的同步任务，执行最新操作")
+                        task.cancel()
+                self._progressive_sync_tasks[sync_key].clear()
+            else:
+                self._progressive_sync_tasks[sync_key] = []
             
-            # 立即同步到从设备（从设备立即响应）
-            _LOGGER.info(f"[PROGRESSIVE] 从设备立即响应: {slave_entity}")
-            await self._sync_to_entity(new_state, slave_entity)
+            # 从设备立即执行主控设备的最新目标值（不等待，不监控过程）
+            _LOGGER.info(f"[PROGRESSIVE] 从设备立即执行主控设备的最新目标值: {slave_entity}")
+            _LOGGER.info(f"[PROGRESSIVE] 目标状态: {new_state.state}, 属性: {dict(new_state.attributes)}")
             
-            # 启动动作完成监控任务
-            self._current_sync_task = self.hass.async_create_task(
-                self._monitor_action_completion_optimized(master_entity, slave_entity, target_values)
-            )
+            # 创建新的同步任务
+            sync_task = asyncio.create_task(self._sync_to_entity(new_state, slave_entity))
+            self._progressive_sync_tasks[sync_key].append(sync_task)
             
-            _LOGGER.info(f"[PROGRESSIVE] 智能主从同步启动完成: {master_entity} -> {slave_entity}")
+            # 等待同步完成（立即执行）
+            await sync_task
             
-        except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 智能主从同步失败: {source_entity_id} -> {target_entity_id} - {e}")
-            self._sync_in_progress = False
-    
-    async def _monitor_action_completion_optimized(self, master_entity: str, slave_entity: str, target_values: dict):
-        """优化的动作完成监控 - 支持快速连续操作"""
-        try:
-            _LOGGER.info(f"[PROGRESSIVE] 开始监控动作完成: 主控={master_entity}, 从设备={slave_entity}")
+            # 记录主控设备的最新操作时间和状态
+            self._last_master_action_time = time.time()
+            self._last_master_entity = master_entity
+            self._last_master_state = new_state
             
-            # 设置同步进行标志
-            self._sync_in_progress = True
-            
-            # 等待动作完成检测超时时间
-            timeout = self._action_completion_timeout
-            start_time = time.time()
-            check_interval = 0.1  # 更频繁的检查间隔
-            
-            while time.time() - start_time < timeout:
-                try:
-                    # 检查主控设备和从设备状态是否稳定
-                    master_state = self.hass.states.get(master_entity)
-                    slave_state = self.hass.states.get(slave_entity)
-                    
-                    if master_state and slave_state:
-                        # 检查状态是否达到目标值
-                        master_stable = self._check_state_stability(master_state, target_values)
-                        slave_stable = self._check_state_stability(slave_state, target_values)
-                        
-                        if master_stable and slave_stable:
-                            _LOGGER.info(f"[PROGRESSIVE] 动作完成: 主控和从设备都已达到目标状态")
-                            break
-                    
-                    # 等待一段时间再检查
-                    await asyncio.sleep(check_interval)
-                    
-                except asyncio.CancelledError:
-                    _LOGGER.info(f"[PROGRESSIVE] 动作监控被取消（支持快速连续操作）")
-                    return
-            
-            # 执行最终状态同步（以主控设备状态为准）
-            await self._perform_final_sync(master_entity, slave_entity)
-            
-            _LOGGER.info(f"[PROGRESSIVE] 动作完成监控结束: {master_entity} -> {slave_entity}")
+            _LOGGER.info(f"[PROGRESSIVE] 立即同步完成: {master_entity} -> {slave_entity}")
             
         except asyncio.CancelledError:
-            _LOGGER.info(f"[PROGRESSIVE] 动作监控被取消")
+            _LOGGER.info(f"[PROGRESSIVE] 同步任务被取消（快速连续操作）: {source_entity_id} -> {target_entity_id}")
         except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 动作完成监控失败: {master_entity}, {slave_entity} - {e}")
-        finally:
-            self._sync_in_progress = False
+            _LOGGER.error(f"[PROGRESSIVE] 立即同步失败: {source_entity_id} -> {target_entity_id} - {e}")
     
-    async def _check_action_stability(self, entity_id: str, target_values: dict) -> bool:
-        """检查动作稳定性"""
-        try:
-            state = self.hass.states.get(entity_id)
-            if not state:
-                return False
-            
-            # 检查目标值是否达到
-            for attr, target_value in target_values.items():
-                current_value = state.attributes.get(attr)
-                if current_value is None:
-                    continue
-                
-                # 对于数值类型，允许小的误差
-                if isinstance(target_value, (int, float)) and isinstance(current_value, (int, float)):
-                    if abs(current_value - target_value) > 1:  # 允许1的误差
-                        return False
-                elif current_value != target_value:
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 检查动作稳定性失败: {entity_id} - {e}")
-            return False
+    # 移除复杂的动作监控逻辑，改为立即同步机制
+    # 不再需要 _monitor_action_completion_optimized 方法
     
-    def _check_state_stability(self, current_state: State, target_values: dict) -> bool:
-        """检查设备状态是否稳定并达到目标值"""
-        try:
-            # 检查基本状态
-            if current_state.state != target_values.get('state'):
-                return False
-            
-            # 检查关键属性
-            target_attrs = target_values.get('attributes', {})
-            current_attrs = current_state.attributes
-            
-            # 检查亮度
-            if 'brightness' in target_attrs:
-                target_brightness = target_attrs['brightness']
-                current_brightness = current_attrs.get('brightness')
-                if abs((current_brightness or 0) - target_brightness) > 5:  # 允许5的误差
-                    return False
-            
-            # 检查色温
-            if 'color_temp' in target_attrs:
-                target_temp = target_attrs['color_temp']
-                current_temp = current_attrs.get('color_temp')
-                if abs((current_temp or 0) - target_temp) > 10:  # 允许10的误差
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            _LOGGER.warning(f"状态稳定性检查失败: {e}")
-            return False
-    
-    async def _perform_final_sync(self, master_entity: str, slave_entity: str):
-        """执行最终状态同步（以主控设备状态为准）"""
-        try:
-            _LOGGER.info(f"[PROGRESSIVE] 执行最终状态同步: {master_entity} -> {slave_entity}")
-            
-            # 获取主控设备的最终状态
-            master_state = self.hass.states.get(master_entity)
-            if not master_state:
-                _LOGGER.warning(f"[PROGRESSIVE] 无法获取主控设备状态: {master_entity}")
-                return
-            
-            # 同步到从设备（以主控设备状态为准）
-            await self._sync_to_entity(master_state, slave_entity)
-            
-            _LOGGER.info(f"[PROGRESSIVE] 最终状态同步完成: {master_entity} -> {slave_entity}")
-            
-        except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 最终状态同步失败: {master_entity} -> {slave_entity} - {e}")
-    
-    async def _perform_final_confirmation(self, master_entity: str, slave_entity: str):
-        """执行最终确认同步"""
-        try:
-            _LOGGER.debug(f"[PROGRESSIVE] 执行最终确认同步: {master_entity} -> {slave_entity}")
-            
-            master_state = self.hass.states.get(master_entity)
-            if master_state:
-                # 最终确认同步，确保两个设备状态一致
-                await self._sync_to_entity(master_state, slave_entity)
-                _LOGGER.debug(f"[PROGRESSIVE] 最终确认同步完成: {master_entity} -> {slave_entity}")
-            
-        except Exception as e:
-            _LOGGER.error(f"[PROGRESSIVE] 最终确认同步失败: {master_entity} -> {slave_entity} - {e}")
+    # 移除复杂的状态检查和最终同步逻辑
+    # 立即同步机制不需要这些方法：
+    # - _check_action_stability
+    # - _check_state_stability  
+    # - _perform_final_sync
+    # - _perform_final_confirmation
         
     async def async_setup(self):
         """设置同步监听器"""
@@ -894,15 +779,11 @@ class SimpleSyncCoordinator:
             is_progressive = self._is_progressive_device(new_state.entity_id)
             _LOGGER.info(f"[DEBUG] 步进设备检测: {is_progressive}")
             
-            # 根据配置的同步模式决定是否启用主从同步
-            if (is_progressive and self._has_progressive_change(old_state, new_state) and 
-                self._progressive_sync_mode in ['smart', 'master_slave']):
-                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用主从同步模式: {self.entity1_id} (模式: {self._progressive_sync_mode})")
+            # 步进设备只在触发时立即同步，不进行实时同步
+            if is_progressive and self._has_progressive_change(old_state, new_state):
+                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用立即同步模式: {self.entity1_id}")
                 await self._handle_progressive_sync(self.entity1_id, self.entity2_id, new_state, old_state)
                 return
-            elif self._progressive_sync_mode == 'realtime':
-                _LOGGER.info(f"[DEBUG] 实时模式，跳过主从同步逻辑: {self.entity1_id}")
-                # 继续执行传统的实时同步逻辑
             
             # 使用精确的变化检测
             is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
@@ -984,15 +865,11 @@ class SimpleSyncCoordinator:
             is_progressive = self._is_progressive_device(new_state.entity_id)
             _LOGGER.info(f"[DEBUG] 步进设备检测: {is_progressive}")
             
-            # 根据配置的同步模式决定是否启用主从同步
-            if (is_progressive and self._has_progressive_change(old_state, new_state) and 
-                self._progressive_sync_mode in ['smart', 'master_slave']):
-                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用主从同步模式: {self.entity2_id} (模式: {self._progressive_sync_mode})")
+            # 步进设备只在触发时立即同步，不进行实时同步
+            if is_progressive and self._has_progressive_change(old_state, new_state):
+                _LOGGER.info(f"[DEBUG] 检测到步进设备变化，启用立即同步模式: {self.entity2_id}")
                 await self._handle_progressive_sync(self.entity2_id, self.entity1_id, new_state, old_state)
                 return
-            elif self._progressive_sync_mode == 'realtime':
-                _LOGGER.info(f"[DEBUG] 实时模式，跳过主从同步逻辑: {self.entity2_id}")
-                # 继续执行传统的实时同步逻辑
             
             # 使用精确的变化检测
             is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
