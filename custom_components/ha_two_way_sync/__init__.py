@@ -136,96 +136,96 @@ class SimpleSyncCoordinator:
              _LOGGER.error(f"[DEBUG] 监听器健康检查失败: {e}")
              return False
      
-     async def manual_sync_entity1_to_entity2(self, force: bool = False):
-         """手动触发从实体1到实体2的同步（调试用）"""
-         _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity1_id} -> {self.entity2_id}, force={force}")
-         
-         try:
-             entity1_state = self.hass.states.get(self.entity1_id)
-             if not entity1_state:
-                 _LOGGER.error(f"[MANUAL] 实体1不存在: {self.entity1_id}")
-                 return False
-             
-             _LOGGER.info(f"[MANUAL] 实体1当前状态: {entity1_state.state}")
-             _LOGGER.info(f"[MANUAL] 实体1属性: {dict(entity1_state.attributes)}")
-             
-             # 强制同步
-             self._syncing = True
-             await self._sync_to_entity(entity1_state, self.entity2_id)
-             self._syncing = False
-             
-             _LOGGER.info(f"[MANUAL] 手动同步完成")
-             return True
-             
-         except Exception as e:
-             _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
-             self._syncing = False
-             return False
+    async def manual_sync_entity1_to_entity2(self, force: bool = False):
+        """手动触发从实体1到实体2的同步（调试用）"""
+        _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity1_id} -> {self.entity2_id}, force={force}")
+        
+        try:
+            entity1_state = self.hass.states.get(self.entity1_id)
+            if not entity1_state:
+                _LOGGER.error(f"[MANUAL] 实体1不存在: {self.entity1_id}")
+                return False
+            
+            _LOGGER.info(f"[MANUAL] 实体1当前状态: {entity1_state.state}")
+            _LOGGER.info(f"[MANUAL] 实体1属性: {dict(entity1_state.attributes)}")
+            
+            # 强制同步
+            self._syncing = True
+            await self._sync_to_entity(entity1_state, self.entity2_id)
+            self._syncing = False
+            
+            _LOGGER.info(f"[MANUAL] 手动同步完成")
+            return True
+            
+        except Exception as e:
+            _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
+            self._syncing = False
+            return False
+    
+    async def manual_sync_entity2_to_entity1(self, force: bool = False):
+        """手动触发从实体2到实体1的同步（调试用）"""
+        _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity2_id} -> {self.entity1_id}, force={force}")
+        
+        try:
+            entity2_state = self.hass.states.get(self.entity2_id)
+            if not entity2_state:
+                _LOGGER.error(f"[MANUAL] 实体2不存在: {self.entity2_id}")
+                return False
+            
+            _LOGGER.info(f"[MANUAL] 实体2当前状态: {entity2_state.state}")
+            _LOGGER.info(f"[MANUAL] 实体2属性: {dict(entity2_state.attributes)}")
+            
+            # 强制同步
+            self._syncing = True
+            await self._sync_to_entity(entity2_state, self.entity1_id)
+            self._syncing = False
+            
+            _LOGGER.info(f"[MANUAL] 手动同步完成")
+            return True
+            
+        except Exception as e:
+            _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
+            self._syncing = False
+            return False
+    
+    async def get_sync_status(self):
+        """获取同步状态信息（调试用）"""
+        try:
+            entity1_state = self.hass.states.get(self.entity1_id)
+            entity2_state = self.hass.states.get(self.entity2_id)
+            
+            status = {
+                "enabled": self.enabled,
+                "syncing": self._syncing,
+                "listeners_count": len(self._unsubscribe_listeners),
+                "entity1": {
+                    "id": self.entity1_id,
+                    "exists": entity1_state is not None,
+                    "state": entity1_state.state if entity1_state else None,
+                    "domain": entity1_state.domain if entity1_state else None,
+                    "attributes": dict(entity1_state.attributes) if entity1_state else None
+                },
+                "entity2": {
+                    "id": self.entity2_id,
+                    "exists": entity2_state is not None,
+                    "state": entity2_state.state if entity2_state else None,
+                    "domain": entity2_state.domain if entity2_state else None,
+                    "attributes": dict(entity2_state.attributes) if entity2_state else None
+                },
+                "last_sync_times": {
+                    "entity1": self._last_sync_time.get(self.entity1_id),
+                    "entity2": self._last_sync_time.get(self.entity2_id)
+                }
+            }
+            
+            _LOGGER.info(f"[STATUS] 同步状态: {status}")
+            return status
+            
+        except Exception as e:
+            _LOGGER.error(f"[STATUS] 获取同步状态失败: {e}")
+            return None
      
-     async def manual_sync_entity2_to_entity1(self, force: bool = False):
-         """手动触发从实体2到实体1的同步（调试用）"""
-         _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity2_id} -> {self.entity1_id}, force={force}")
-         
-         try:
-             entity2_state = self.hass.states.get(self.entity2_id)
-             if not entity2_state:
-                 _LOGGER.error(f"[MANUAL] 实体2不存在: {self.entity2_id}")
-                 return False
-             
-             _LOGGER.info(f"[MANUAL] 实体2当前状态: {entity2_state.state}")
-             _LOGGER.info(f"[MANUAL] 实体2属性: {dict(entity2_state.attributes)}")
-             
-             # 强制同步
-             self._syncing = True
-             await self._sync_to_entity(entity2_state, self.entity1_id)
-             self._syncing = False
-             
-             _LOGGER.info(f"[MANUAL] 手动同步完成")
-             return True
-             
-         except Exception as e:
-             _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
-             self._syncing = False
-             return False
-     
-     async def get_sync_status(self):
-         """获取同步状态信息（调试用）"""
-         try:
-             entity1_state = self.hass.states.get(self.entity1_id)
-             entity2_state = self.hass.states.get(self.entity2_id)
-             
-             status = {
-                 "enabled": self.enabled,
-                 "syncing": self._syncing,
-                 "listeners_count": len(self._unsubscribe_listeners),
-                 "entity1": {
-                     "id": self.entity1_id,
-                     "exists": entity1_state is not None,
-                     "state": entity1_state.state if entity1_state else None,
-                     "domain": entity1_state.domain if entity1_state else None,
-                     "attributes": dict(entity1_state.attributes) if entity1_state else None
-                 },
-                 "entity2": {
-                     "id": self.entity2_id,
-                     "exists": entity2_state is not None,
-                     "state": entity2_state.state if entity2_state else None,
-                     "domain": entity2_state.domain if entity2_state else None,
-                     "attributes": dict(entity2_state.attributes) if entity2_state else None
-                 },
-                 "last_sync_times": {
-                     "entity1": self._last_sync_time.get(self.entity1_id),
-                     "entity2": self._last_sync_time.get(self.entity2_id)
-                 }
-             }
-             
-             _LOGGER.info(f"[STATUS] 同步状态: {status}")
-             return status
-             
-         except Exception as e:
-             _LOGGER.error(f"[STATUS] 获取同步状态失败: {e}")
-             return None
-     
-     def _check_important_attrs_changed(self, new_state: State, old_state: State) -> bool:
+    def _check_important_attrs_changed(self, new_state: State, old_state: State) -> bool:
         """检查重要属性是否发生变化"""
         domain = new_state.domain
         important_attrs = []
