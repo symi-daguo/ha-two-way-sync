@@ -145,8 +145,6 @@ class SimpleSyncCoordinator:
     
     def _set_action_state(self, entity_id: str, state: str, master_entity: str = None, target_values: dict = None):
         """设置实体的动作状态"""
-        import time
-        
         if entity_id not in self._action_states:
             self._action_states[entity_id] = {}
         
@@ -172,8 +170,6 @@ class SimpleSyncCoordinator:
     
     def _is_action_timeout(self, entity_id: str) -> bool:
         """检查动作是否超时"""
-        import time
-        
         action_info = self._action_states.get(entity_id)
         if not action_info:
             return False
