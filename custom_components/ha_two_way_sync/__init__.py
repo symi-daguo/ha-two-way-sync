@@ -52,23 +52,180 @@ class SimpleSyncCoordinator:
     async def async_setup(self):
         """设置同步监听器"""
         if not self.enabled or not self.entity1_id or not self.entity2_id:
+            _LOGGER.warning(f"同步设置跳过: enabled={self.enabled}, entity1={self.entity1_id}, entity2={self.entity2_id}")
             return
             
+        # 检查实体是否存在
+        entity1_state = self.hass.states.get(self.entity1_id)
+        entity2_state = self.hass.states.get(self.entity2_id)
+        
+        if not entity1_state:
+            _LOGGER.error(f"实体1不存在: {self.entity1_id}")
+            return
+        if not entity2_state:
+            _LOGGER.error(f"实体2不存在: {self.entity2_id}")
+            return
+            
+        _LOGGER.info(f"[DEBUG] 实体状态检查通过: {self.entity1_id}({entity1_state.state}) <-> {self.entity2_id}({entity2_state.state})")
+        _LOGGER.info(f"[DEBUG] 实体1域: {entity1_state.domain}, 实体2域: {entity2_state.domain}")
+        _LOGGER.info(f"[DEBUG] 实体1属性: {dict(entity1_state.attributes)}")
+        _LOGGER.info(f"[DEBUG] 实体2属性: {dict(entity2_state.attributes)}")
+            
         # 监听两个实体的状态变化
-        self._unsubscribe_listeners.append(
-            async_track_state_change_event(
+        _LOGGER.info(f"[DEBUG] 开始注册事件监听器...")
+        
+        try:
+            listener1 = async_track_state_change_event(
                 self.hass, [self.entity1_id], self._handle_entity1_change
             )
-        )
-        self._unsubscribe_listeners.append(
-            async_track_state_change_event(
+            self._unsubscribe_listeners.append(listener1)
+            _LOGGER.info(f"[DEBUG] 实体1监听器注册成功: {self.entity1_id}")
+        except Exception as e:
+            _LOGGER.error(f"[DEBUG] 实体1监听器注册失败: {self.entity1_id} - {e}")
+            return
+            
+        try:
+            listener2 = async_track_state_change_event(
                 self.hass, [self.entity2_id], self._handle_entity2_change
             )
-        )
+            self._unsubscribe_listeners.append(listener2)
+            _LOGGER.info(f"[DEBUG] 实体2监听器注册成功: {self.entity2_id}")
+        except Exception as e:
+            _LOGGER.error(f"[DEBUG] 实体2监听器注册失败: {self.entity2_id} - {e}")
+            return
         
-        _LOGGER.info(f"双向同步已启用: {self.entity1_id} <-> {self.entity2_id}")
+        _LOGGER.info(f"[DEBUG] 双向同步已启用: {self.entity1_id} <-> {self.entity2_id}")
+        _LOGGER.info(f"[DEBUG] 事件监听器已注册，监听器数量: {len(self._unsubscribe_listeners)}")
+        
+        # 验证监听器状态
+        await self._verify_listeners_health()
     
-    def _check_important_attrs_changed(self, new_state: State, old_state: State) -> bool:
+    async def _verify_listeners_health(self):
+        """验证事件监听器的健康状态"""
+        try:
+            _LOGGER.info(f"[DEBUG] 开始验证监听器健康状态...")
+            
+            # 检查监听器数量
+            expected_listeners = 2
+            actual_listeners = len(self._unsubscribe_listeners)
+            _LOGGER.info(f"[DEBUG] 监听器数量检查: 期望={expected_listeners}, 实际={actual_listeners}")
+            
+            if actual_listeners != expected_listeners:
+                _LOGGER.error(f"[DEBUG] 监听器数量不匹配！期望{expected_listeners}个，实际{actual_listeners}个")
+                return False
+            
+            # 检查实体是否仍然存在
+            entity1_exists = self.hass.states.get(self.entity1_id) is not None
+            entity2_exists = self.hass.states.get(self.entity2_id) is not None
+            _LOGGER.info(f"[DEBUG] 实体存在性检查: {self.entity1_id}={entity1_exists}, {self.entity2_id}={entity2_exists}")
+            
+            if not entity1_exists or not entity2_exists:
+                _LOGGER.error(f"[DEBUG] 实体不存在！entity1={entity1_exists}, entity2={entity2_exists}")
+                return False
+            
+            # 检查监听器是否可调用
+            for i, listener in enumerate(self._unsubscribe_listeners):
+                if not callable(listener):
+                    _LOGGER.error(f"[DEBUG] 监听器{i}不可调用！")
+                    return False
+            
+            _LOGGER.info(f"[DEBUG] 监听器健康检查通过！")
+            return True
+            
+        except Exception as e:
+             _LOGGER.error(f"[DEBUG] 监听器健康检查失败: {e}")
+             return False
+     
+     async def manual_sync_entity1_to_entity2(self, force: bool = False):
+         """手动触发从实体1到实体2的同步（调试用）"""
+         _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity1_id} -> {self.entity2_id}, force={force}")
+         
+         try:
+             entity1_state = self.hass.states.get(self.entity1_id)
+             if not entity1_state:
+                 _LOGGER.error(f"[MANUAL] 实体1不存在: {self.entity1_id}")
+                 return False
+             
+             _LOGGER.info(f"[MANUAL] 实体1当前状态: {entity1_state.state}")
+             _LOGGER.info(f"[MANUAL] 实体1属性: {dict(entity1_state.attributes)}")
+             
+             # 强制同步
+             self._syncing = True
+             await self._sync_to_entity(entity1_state, self.entity2_id)
+             self._syncing = False
+             
+             _LOGGER.info(f"[MANUAL] 手动同步完成")
+             return True
+             
+         except Exception as e:
+             _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
+             self._syncing = False
+             return False
+     
+     async def manual_sync_entity2_to_entity1(self, force: bool = False):
+         """手动触发从实体2到实体1的同步（调试用）"""
+         _LOGGER.info(f"[MANUAL] 手动触发同步: {self.entity2_id} -> {self.entity1_id}, force={force}")
+         
+         try:
+             entity2_state = self.hass.states.get(self.entity2_id)
+             if not entity2_state:
+                 _LOGGER.error(f"[MANUAL] 实体2不存在: {self.entity2_id}")
+                 return False
+             
+             _LOGGER.info(f"[MANUAL] 实体2当前状态: {entity2_state.state}")
+             _LOGGER.info(f"[MANUAL] 实体2属性: {dict(entity2_state.attributes)}")
+             
+             # 强制同步
+             self._syncing = True
+             await self._sync_to_entity(entity2_state, self.entity1_id)
+             self._syncing = False
+             
+             _LOGGER.info(f"[MANUAL] 手动同步完成")
+             return True
+             
+         except Exception as e:
+             _LOGGER.error(f"[MANUAL] 手动同步失败: {e}")
+             self._syncing = False
+             return False
+     
+     async def get_sync_status(self):
+         """获取同步状态信息（调试用）"""
+         try:
+             entity1_state = self.hass.states.get(self.entity1_id)
+             entity2_state = self.hass.states.get(self.entity2_id)
+             
+             status = {
+                 "enabled": self.enabled,
+                 "syncing": self._syncing,
+                 "listeners_count": len(self._unsubscribe_listeners),
+                 "entity1": {
+                     "id": self.entity1_id,
+                     "exists": entity1_state is not None,
+                     "state": entity1_state.state if entity1_state else None,
+                     "domain": entity1_state.domain if entity1_state else None,
+                     "attributes": dict(entity1_state.attributes) if entity1_state else None
+                 },
+                 "entity2": {
+                     "id": self.entity2_id,
+                     "exists": entity2_state is not None,
+                     "state": entity2_state.state if entity2_state else None,
+                     "domain": entity2_state.domain if entity2_state else None,
+                     "attributes": dict(entity2_state.attributes) if entity2_state else None
+                 },
+                 "last_sync_times": {
+                     "entity1": self._last_sync_time.get(self.entity1_id),
+                     "entity2": self._last_sync_time.get(self.entity2_id)
+                 }
+             }
+             
+             _LOGGER.info(f"[STATUS] 同步状态: {status}")
+             return status
+             
+         except Exception as e:
+             _LOGGER.error(f"[STATUS] 获取同步状态失败: {e}")
+             return None
+     
+     def _check_important_attrs_changed(self, new_state: State, old_state: State) -> bool:
         """检查重要属性是否发生变化"""
         domain = new_state.domain
         important_attrs = []
@@ -102,23 +259,52 @@ class SimpleSyncCoordinator:
         
         return False
     
-    def _is_significant_change(self, new_state: State, old_state: State) -> bool:
+    def _is_significant_change(self, new_state: State, old_state: State, force_sync: bool = False) -> bool:
         """智能同步判断：检查状态变化是否有意义"""
+        _LOGGER.info(f"[DEBUG] 状态变化检测开始: entity={new_state.entity_id}")
+        _LOGGER.info(f"[DEBUG] 新状态: {new_state.state}, 旧状态: {old_state.state if old_state else None}")
+        
         if old_state is None:
+            _LOGGER.info(f"[DEBUG] 旧状态为空，认为是有意义变化")
+            return True
+        
+        # 强制同步模式
+        if force_sync:
+            _LOGGER.info(f"[DEBUG] 强制同步模式，跳过检测")
             return True
         
         # 状态变化总是有意义的
         if new_state.state != old_state.state:
+            _LOGGER.info(f"[DEBUG] 状态发生变化: {old_state.state} -> {new_state.state}")
             return True
         
         # 检查重要属性是否变化
-        if self._check_important_attrs_changed(new_state, old_state):
+        attrs_changed = self._check_important_attrs_changed(new_state, old_state)
+        _LOGGER.info(f"[DEBUG] 重要属性变化检测结果: {attrs_changed}")
+        if attrs_changed:
             return True
         
-        # 检查last_changed时间，避免重复处理相同事件
-        if new_state.last_changed == old_state.last_changed:
-            return False
+        # 放宽时间检查条件 - 如果last_changed时间不同，也认为是有意义的变化
+        time_changed = new_state.last_changed != old_state.last_changed
+        _LOGGER.info(f"[DEBUG] 时间变化检测: {time_changed}")
+        if time_changed:
+            # 检查时间差是否足够大（避免微小时间差导致的误判）
+            time_diff = abs((new_state.last_changed - old_state.last_changed).total_seconds())
+            _LOGGER.info(f"[DEBUG] 时间差: {time_diff}秒")
+            if time_diff > 0.1:  # 大于0.1秒的时间差认为是有意义的
+                return True
         
+        # 对于灯光设备，额外检查更多属性变化
+        if new_state.domain == "light":
+            light_attrs = ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color", "effect", "white_value"]
+            for attr in light_attrs:
+                old_val = old_state.attributes.get(attr)
+                new_val = new_state.attributes.get(attr)
+                if old_val != new_val:
+                    _LOGGER.info(f"[DEBUG] 灯光属性变化: {attr} {old_val} -> {new_val}")
+                    return True
+        
+        _LOGGER.info(f"[DEBUG] 未检测到有意义的状态变化")
         return False
     
     def _should_batch_sync(self, entity_id: str) -> bool:
@@ -298,25 +484,39 @@ class SimpleSyncCoordinator:
     
     async def _handle_entity1_change(self, event: Event):
         """处理实体1的状态变化"""
+        _LOGGER.info(f"[LISTENER] ===== 实体1监听器被触发 ===== {self.entity1_id}")
+        _LOGGER.info(f"[LISTENER] 事件类型: {event.event_type}")
+        _LOGGER.info(f"[LISTENER] 事件数据: {event.data}")
+        _LOGGER.info(f"[DEBUG] 实体1状态变化事件触发: {self.entity1_id}")
+        
         if self._sync_in_progress:
+            _LOGGER.debug(f"[DEBUG] 同步正在进行中，跳过: {self.entity1_id}")
             return
             
         try:
             new_state = event.data.get("new_state")
             old_state = event.data.get("old_state")
             
+            _LOGGER.info(f"[DEBUG] 事件数据: new_state={new_state.state if new_state else None}, old_state={old_state.state if old_state else None}")
+            
             if not new_state or not old_state:
-                _LOGGER.debug("状态变化事件数据不完整，跳过同步")
+                _LOGGER.warning(f"[DEBUG] 状态变化事件数据不完整，跳过同步: new_state={new_state}, old_state={old_state}")
                 return
             
             # 使用精确的变化检测
-            if not self._is_significant_change(new_state, old_state):
-                _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity1_id}")
+            is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
+            _LOGGER.info(f"[DEBUG] 状态变化检测结果: {is_significant}, {old_state.state}->{new_state.state}")
+            
+            if not is_significant:
+                _LOGGER.info(f"[DEBUG] 状态未发生有意义变化，跳过同步: {self.entity1_id}")
                 return
             
             # 检查是否为重复状态
-            if self._is_duplicate_state(self.entity1_id, new_state):
-                _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity1_id}")
+            is_duplicate = self._is_duplicate_state(self.entity1_id, new_state)
+            _LOGGER.info(f"[DEBUG] 重复状态检测结果: {is_duplicate}")
+            
+            if is_duplicate:
+                _LOGGER.info(f"[DEBUG] 检测到重复状态，跳过同步: {self.entity1_id}")
                 return
             
             # 清理状态缓存（带类型验证）
@@ -330,22 +530,29 @@ class SimpleSyncCoordinator:
             current_time = time.time()
             
             # 批量同步优化
-            if self._should_batch_sync(self.entity1_id):
+            should_batch = self._should_batch_sync(self.entity1_id)
+            _LOGGER.info(f"[DEBUG] 批量同步检测结果: {should_batch}")
+            
+            if should_batch:
                 # 高频同步时增加冷却时间
                 effective_cooldown = self._sync_cooldown * 1.5
-                _LOGGER.debug(f"检测到高频同步，启用批量优化: {sync_key}")
+                _LOGGER.info(f"[DEBUG] 检测到高频同步，启用批量优化: {sync_key}")
             else:
                 effective_cooldown = self._sync_cooldown
             
             if sync_key in self._last_sync_times:
                 time_since_last = current_time - self._last_sync_times[sync_key]
+                _LOGGER.info(f"[DEBUG] 冷却时间检查: 距离上次={time_since_last:.2f}s, 阈值={effective_cooldown}s")
                 if time_since_last < effective_cooldown:
-                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
+                    _LOGGER.info(f"[DEBUG] 冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
                     return
+            else:
+                _LOGGER.info(f"[DEBUG] 首次同步，无冷却时间限制")
             
             # 记录同步时间
             self._last_sync_times[sync_key] = current_time
             
+            _LOGGER.info(f"[DEBUG] 开始同步: {self.entity1_id} -> {self.entity2_id}")
             _LOGGER.debug(f"实体1状态变化: {self.entity1_id} -> {new_state.state}")
             await self._sync_to_entity(new_state, self.entity2_id)
         except Exception as err:
@@ -353,25 +560,39 @@ class SimpleSyncCoordinator:
     
     async def _handle_entity2_change(self, event: Event):
         """处理实体2的状态变化"""
+        _LOGGER.info(f"[LISTENER] ===== 实体2监听器被触发 ===== {self.entity2_id}")
+        _LOGGER.info(f"[LISTENER] 事件类型: {event.event_type}")
+        _LOGGER.info(f"[LISTENER] 事件数据: {event.data}")
+        _LOGGER.info(f"[DEBUG] 实体2状态变化事件触发: {self.entity2_id}")
+        
         if self._sync_in_progress:
+            _LOGGER.debug(f"[DEBUG] 同步正在进行中，跳过: {self.entity2_id}")
             return
             
         try:
             new_state = event.data.get("new_state")
             old_state = event.data.get("old_state")
             
+            _LOGGER.info(f"[DEBUG] 事件数据: new_state={new_state.state if new_state else None}, old_state={old_state.state if old_state else None}")
+            
             if not new_state or not old_state:
-                _LOGGER.debug("状态变化事件数据不完整，跳过同步")
+                _LOGGER.warning(f"[DEBUG] 状态变化事件数据不完整，跳过同步: new_state={new_state}, old_state={old_state}")
                 return
             
             # 使用精确的变化检测
-            if not self._is_significant_change(new_state, old_state):
-                _LOGGER.debug(f"状态未发生有意义变化，跳过同步: {self.entity2_id}")
+            is_significant = self._is_significant_change(new_state, old_state, force_sync=False)
+            _LOGGER.info(f"[DEBUG] 状态变化检测结果: {is_significant}, {old_state.state}->{new_state.state}")
+            
+            if not is_significant:
+                _LOGGER.info(f"[DEBUG] 状态未发生有意义变化，跳过同步: {self.entity2_id}")
                 return
             
             # 检查是否为重复状态
-            if self._is_duplicate_state(self.entity2_id, new_state):
-                _LOGGER.debug(f"检测到重复状态，跳过同步: {self.entity2_id}")
+            is_duplicate = self._is_duplicate_state(self.entity2_id, new_state)
+            _LOGGER.info(f"[DEBUG] 重复状态检测结果: {is_duplicate}")
+            
+            if is_duplicate:
+                _LOGGER.info(f"[DEBUG] 检测到重复状态，跳过同步: {self.entity2_id}")
                 return
             
             # 清理状态缓存（带类型验证）
@@ -385,22 +606,29 @@ class SimpleSyncCoordinator:
             current_time = time.time()
             
             # 批量同步优化
-            if self._should_batch_sync(self.entity2_id):
+            should_batch = self._should_batch_sync(self.entity2_id)
+            _LOGGER.info(f"[DEBUG] 批量同步检测结果: {should_batch}")
+            
+            if should_batch:
                 # 高频同步时增加冷却时间
                 effective_cooldown = self._sync_cooldown * 1.5
-                _LOGGER.debug(f"检测到高频同步，启用批量优化: {sync_key}")
+                _LOGGER.info(f"[DEBUG] 检测到高频同步，启用批量优化: {sync_key}")
             else:
                 effective_cooldown = self._sync_cooldown
             
             if sync_key in self._last_sync_times:
                 time_since_last = current_time - self._last_sync_times[sync_key]
+                _LOGGER.info(f"[DEBUG] 冷却时间检查: 距离上次={time_since_last:.2f}s, 阈值={effective_cooldown}s")
                 if time_since_last < effective_cooldown:
-                    _LOGGER.debug(f"冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
+                    _LOGGER.info(f"[DEBUG] 冷却时间未到，跳过同步: {time_since_last:.2f}s < {effective_cooldown}s")
                     return
+            else:
+                _LOGGER.info(f"[DEBUG] 首次同步，无冷却时间限制")
             
             # 记录同步时间
             self._last_sync_times[sync_key] = current_time
             
+            _LOGGER.info(f"[DEBUG] 开始同步: {self.entity2_id} -> {self.entity1_id}")
             _LOGGER.debug(f"实体2状态变化: {self.entity2_id} -> {new_state.state}")
             await self._sync_to_entity(new_state, self.entity1_id)
         except Exception as err:
@@ -742,6 +970,87 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_register(DOMAIN, "toggle_sync", handle_toggle_sync)
             _LOGGER.info("已注册切换同步状态服务")
         
+        # 注册调试服务
+        if not hass.services.has_service(DOMAIN, "debug_sync_entity1_to_entity2"):
+            async def handle_debug_sync_1_to_2(call):
+                """处理调试同步服务：实体1到实体2"""
+                try:
+                    entity1 = call.data.get("entity1")
+                    entity2 = call.data.get("entity2")
+                    force = call.data.get("force", False)
+                    
+                    # 查找对应的协调器
+                    target_coordinator = None
+                    for coord in hass.data[DOMAIN].values():
+                        if hasattr(coord, 'entity1_id') and hasattr(coord, 'entity2_id'):
+                            if coord.entity1_id == entity1 and coord.entity2_id == entity2:
+                                target_coordinator = coord
+                                break
+                    
+                    if target_coordinator:
+                        result = await target_coordinator.manual_sync_entity1_to_entity2(force)
+                        _LOGGER.info(f"调试同步结果: {result}")
+                    else:
+                        _LOGGER.error(f"调试同步失败: 未找到对应的同步配置")
+                except Exception as err:
+                    _LOGGER.error(f"调试同步失败: {err}", exc_info=True)
+            
+            hass.services.async_register(DOMAIN, "debug_sync_entity1_to_entity2", handle_debug_sync_1_to_2)
+            _LOGGER.info("已注册调试同步服务（实体1到实体2）")
+        
+        if not hass.services.has_service(DOMAIN, "debug_sync_entity2_to_entity1"):
+            async def handle_debug_sync_2_to_1(call):
+                """处理调试同步服务：实体2到实体1"""
+                try:
+                    entity1 = call.data.get("entity1")
+                    entity2 = call.data.get("entity2")
+                    force = call.data.get("force", False)
+                    
+                    # 查找对应的协调器
+                    target_coordinator = None
+                    for coord in hass.data[DOMAIN].values():
+                        if hasattr(coord, 'entity1_id') and hasattr(coord, 'entity2_id'):
+                            if coord.entity1_id == entity1 and coord.entity2_id == entity2:
+                                target_coordinator = coord
+                                break
+                    
+                    if target_coordinator:
+                        result = await target_coordinator.manual_sync_entity2_to_entity1(force)
+                        _LOGGER.info(f"调试同步结果: {result}")
+                    else:
+                        _LOGGER.error(f"调试同步失败: 未找到对应的同步配置")
+                except Exception as err:
+                    _LOGGER.error(f"调试同步失败: {err}", exc_info=True)
+            
+            hass.services.async_register(DOMAIN, "debug_sync_entity2_to_entity1", handle_debug_sync_2_to_1)
+            _LOGGER.info("已注册调试同步服务（实体2到实体1）")
+        
+        if not hass.services.has_service(DOMAIN, "get_sync_status"):
+            async def handle_get_sync_status(call):
+                """处理获取同步状态服务"""
+                try:
+                    entity1 = call.data.get("entity1")
+                    entity2 = call.data.get("entity2")
+                    
+                    # 查找对应的协调器
+                    target_coordinator = None
+                    for coord in hass.data[DOMAIN].values():
+                        if hasattr(coord, 'entity1_id') and hasattr(coord, 'entity2_id'):
+                            if coord.entity1_id == entity1 and coord.entity2_id == entity2:
+                                target_coordinator = coord
+                                break
+                    
+                    if target_coordinator:
+                        status = await target_coordinator.get_sync_status()
+                        _LOGGER.info(f"同步状态查询完成")
+                    else:
+                        _LOGGER.error(f"获取同步状态失败: 未找到对应的同步配置")
+                except Exception as err:
+                    _LOGGER.error(f"获取同步状态失败: {err}", exc_info=True)
+            
+            hass.services.async_register(DOMAIN, "get_sync_status", handle_get_sync_status)
+            _LOGGER.info("已注册获取同步状态服务")
+        
         _LOGGER.info(f"双向同步集成设置完成: {entity1_id} <-> {entity2_id}")
         return True
         
@@ -767,7 +1076,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, "manual_sync")
             hass.services.async_remove(DOMAIN, "toggle_sync")
-            _LOGGER.info("已移除双向同步服务")
+            hass.services.async_remove(DOMAIN, "debug_sync_entity1_to_entity2")
+            hass.services.async_remove(DOMAIN, "debug_sync_entity2_to_entity1")
+            hass.services.async_remove(DOMAIN, "get_sync_status")
+            _LOGGER.info("已移除双向同步服务和调试服务")
         
         return True
         
