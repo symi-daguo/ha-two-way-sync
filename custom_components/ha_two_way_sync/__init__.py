@@ -83,17 +83,17 @@ class SimpleSyncCoordinator:
                 old_val = old_state.attributes.get(attr)
                 new_val = new_state.attributes.get(attr)
                 
-                # 特殊处理亮度值，忽略小于5的变化
+                # 特殊处理亮度值，忽略小于3的变化
                 if attr == "brightness":
                     if new_val is not None and old_val is not None:
-                        if abs(float(new_val) - float(old_val)) >= 5:
+                        if abs(float(new_val) - float(old_val)) >= 3:
                             return True
                     elif new_val != old_val:
                         return True
-                # 特殊处理色温，忽略小于10的变化
+                # 特殊处理色温，忽略小于5的变化
                 elif attr == "color_temp":
                     if new_val is not None and old_val is not None:
-                        if abs(float(new_val) - float(old_val)) >= 10:
+                        if abs(float(new_val) - float(old_val)) >= 5:
                             return True
                     elif new_val != old_val:
                         return True
@@ -154,8 +154,8 @@ class SimpleSyncCoordinator:
             try:
                 old_num = float(old_val)
                 new_num = float(new_val)
-                # 亮度允许2的误差，色温允许10的误差
-                tolerance = 2 if attr_name == "brightness" else 10
+                # 亮度允许1的误差，色温允许5的误差
+                tolerance = 1 if attr_name == "brightness" else 5
                 return abs(old_num - new_num) <= tolerance
             except (ValueError, TypeError):
                 return False
@@ -212,15 +212,15 @@ class SimpleSyncCoordinator:
         """检查是否可以执行同步，包含增强的防重复和方向锁定机制"""
         current_time = time.time()
         
-        # 检查全局防重复间隔（增加到5秒）
-        if current_time - self._last_sync_time < 5.0:
+        # 检查全局防重复间隔（优化为1秒）
+        if current_time - self._last_sync_time < 1.0:
             _LOGGER.debug(f"同步被防重复机制阻止: {sync_direction}")
             return False
             
         # 检查同步方向锁定
         if self._sync_direction_lock and self._sync_direction_lock != sync_direction:
-            # 如果锁定方向不同，检查是否已过锁定时间（增加到3秒）
-            if current_time - self._sync_direction_lock_time < 3.0:  # 3秒方向锁定
+            # 如果锁定方向不同，检查是否已过锁定时间（优化为1秒）
+            if current_time - self._sync_direction_lock_time < 1.0:  # 1秒方向锁定
                 _LOGGER.debug(f"同步被方向锁定阻止: {sync_direction} (当前锁定: {self._sync_direction_lock})")
                 return False
             else:
@@ -266,23 +266,34 @@ class SimpleSyncCoordinator:
             self._state_history[entity_id].pop(0)
             
     def _is_bouncing_state(self, entity_id: str, new_state: State) -> bool:
-        """检测是否为抖动状态（快速来回变化）"""
+        """检测是否为抖动状态（快速来回变化）- 优化版"""
         if entity_id not in self._state_history:
             return False
             
         history = self._state_history[entity_id]
-        if len(history) < 3:  # 需要至少3个历史记录
+        if len(history) < 5:  # 需要至少5个历史记录才判断抖动
             return False
             
         current_time = time.time()
-        recent_changes = [h for h in history if current_time - h[0] <= 5.0]  # 5秒内的变化
+        recent_changes = [h for h in history if current_time - h[0] <= 3.0]  # 缩短到3秒内的变化
         
-        if len(recent_changes) >= 3:
-            # 检查是否在短时间内反复变化
+        if len(recent_changes) >= 5:
+            # 检查是否在短时间内反复变化（只有在状态值完全相同的情况下才认为是抖动）
             states = [h[1] for h in recent_changes]
-            if len(set(states)) <= 2 and len(states) >= 3:
-                _LOGGER.warning(f"检测到抖动状态: {entity_id}, 最近状态: {states}")
-                return True
+            unique_states = set(states)
+            
+            # 只有当状态在2个值之间快速切换且变化次数超过5次时才认为是抖动
+            if len(unique_states) == 2 and len(states) >= 5:
+                # 检查是否是真正的来回切换模式
+                state_changes = 0
+                for i in range(1, len(states)):
+                    if states[i] != states[i-1]:
+                        state_changes += 1
+                        
+                # 只有当状态变化次数超过4次时才认为是抖动
+                if state_changes >= 4:
+                    _LOGGER.warning(f"检测到抖动状态: {entity_id}, 最近状态: {states}")
+                    return True
                 
         return False
         
@@ -524,8 +535,8 @@ class SimpleSyncCoordinator:
                     target_brightness = target_state.attributes.get("brightness") if target_state else None
                     
                     if source_brightness is not None:
-                        # 只有亮度差异大于等于5时才同步
-                        if target_brightness is None or abs(source_brightness - target_brightness) >= 5:
+                        # 只有亮度差异大于等于3时才同步
+                        if target_brightness is None or abs(source_brightness - target_brightness) >= 3:
                             attrs["brightness"] = source_brightness
                     
                     # 检查是否需要同步颜色
@@ -553,7 +564,7 @@ class SimpleSyncCoordinator:
                     elif "color_temp" in source_state.attributes:
                         source_temp = source_state.attributes["color_temp"]
                         target_temp = target_state.attributes.get("color_temp") if target_state else None
-                        if target_temp is None or abs(source_temp - target_temp) >= 10:
+                        if target_temp is None or abs(source_temp - target_temp) >= 5:
                             attrs["color_temp"] = source_temp
                     
                     # 只有在有实际变化时才调用服务
