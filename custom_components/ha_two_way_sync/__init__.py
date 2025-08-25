@@ -1,9 +1,10 @@
-"""Home Assistant双向同步集成 - v1.1.0"""
+"""Home Assistant双向同步集成 - v1.2.1"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry  # type: ignore[import-untyped]
 from homeassistant.core import Event, HomeAssistant, State  # type: ignore[import-untyped]
