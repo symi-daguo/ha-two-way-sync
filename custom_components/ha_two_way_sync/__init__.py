@@ -266,34 +266,75 @@ class SimpleSyncCoordinator:
             self._state_history[entity_id].pop(0)
             
     def _is_bouncing_state(self, entity_id: str, new_state: State) -> bool:
-        """检测是否为抖动状态（快速来回变化）- 优化版"""
+        """检测是否为抖动状态（快速来回变化）- 修复版"""
         if entity_id not in self._state_history:
             return False
             
         history = self._state_history[entity_id]
-        if len(history) < 5:  # 需要至少5个历史记录才判断抖动
+        if len(history) < 6:  # 需要至少6个历史记录才判断抖动
+            _LOGGER.debug(f"抖动检测 - {entity_id}: 历史记录不足 ({len(history)}/6)")
             return False
             
         current_time = time.time()
-        recent_changes = [h for h in history if current_time - h[0] <= 3.0]  # 缩短到3秒内的变化
+        recent_changes = [h for h in history if current_time - h[0] <= 5.0]  # 5秒内的变化
         
-        if len(recent_changes) >= 5:
-            # 检查是否在短时间内反复变化（只有在状态值完全相同的情况下才认为是抖动）
+        if len(recent_changes) >= 6:
+            # 提取状态值和关键属性
             states = [h[1] for h in recent_changes]
+            attributes_list = [h[2] for h in recent_changes]
+            
+            # 检查状态值的变化
             unique_states = set(states)
             
-            # 只有当状态在2个值之间快速切换且变化次数超过5次时才认为是抖动
-            if len(unique_states) == 2 and len(states) >= 5:
-                # 检查是否是真正的来回切换模式
+            # 只有当状态值在至少2个不同值之间快速切换时才可能是抖动
+            if len(unique_states) >= 2:
+                # 检查是否是真正的来回切换模式（状态值必须不同）
                 state_changes = 0
                 for i in range(1, len(states)):
                     if states[i] != states[i-1]:
                         state_changes += 1
                         
-                # 只有当状态变化次数超过4次时才认为是抖动
+                # 只有当状态值变化次数超过4次时才认为是抖动
                 if state_changes >= 4:
-                    _LOGGER.warning(f"检测到抖动状态: {entity_id}, 最近状态: {states}")
-                    return True
+                    # 进一步检查：如果是灯光实体，还要检查关键属性是否也在快速变化
+                    if entity_id.startswith('light.'):
+                        # 对于灯光，检查亮度、色温等关键属性的变化
+                        brightness_changes = 0
+                        color_temp_changes = 0
+                        
+                        for i in range(1, len(attributes_list)):
+                            prev_attrs = attributes_list[i-1] or {}
+                            curr_attrs = attributes_list[i] or {}
+                            
+                            # 检查亮度变化
+                            prev_brightness = prev_attrs.get('brightness', 0)
+                            curr_brightness = curr_attrs.get('brightness', 0)
+                            if abs(prev_brightness - curr_brightness) > 10:  # 亮度变化超过10才算有意义变化
+                                brightness_changes += 1
+                                
+                            # 检查色温变化
+                            prev_color_temp = prev_attrs.get('color_temp', 0)
+                            curr_color_temp = curr_attrs.get('color_temp', 0)
+                            if abs(prev_color_temp - curr_color_temp) > 20:  # 色温变化超过20才算有意义变化
+                                color_temp_changes += 1
+                        
+                        # 只有状态值和关键属性都在快速变化时才认为是真正的抖动
+                        if brightness_changes >= 3 or color_temp_changes >= 3:
+                            _LOGGER.warning(f"检测到真正的抖动状态: {entity_id}, 状态变化: {state_changes}, 亮度变化: {brightness_changes}, 色温变化: {color_temp_changes}")
+                            _LOGGER.debug(f"抖动状态详情: {entity_id}, 最近状态: {states[-6:]}")
+                            return True
+                        else:
+                            _LOGGER.debug(f"状态值变化但属性变化不大，不认为是抖动: {entity_id}, 状态变化: {state_changes}, 亮度变化: {brightness_changes}, 色温变化: {color_temp_changes}")
+                            return False
+                    else:
+                        # 对于非灯光实体，只检查状态值变化
+                        _LOGGER.warning(f"检测到抖动状态: {entity_id}, 状态变化: {state_changes}")
+                        _LOGGER.debug(f"抖动状态详情: {entity_id}, 最近状态: {states[-6:]}")
+                        return True
+            else:
+                # 状态值相同，不是抖动（比如亮度调节导致的多次'on'状态）
+                _LOGGER.debug(f"状态值相同，不认为是抖动: {entity_id}, 状态: {unique_states}")
+                return False
                 
         return False
         
