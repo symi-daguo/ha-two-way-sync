@@ -1,4 +1,4 @@
-anual_sync:
+manual_sync:
   name: 手动同步
   description: 手动触发两个实体之间的同步
   fields:
