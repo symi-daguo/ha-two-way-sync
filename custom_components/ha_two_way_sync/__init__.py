@@ -1,6 +1,7 @@
-"""Home Assistant双向同步集成 - v1.2.1"""
+"""Home Assistant双向同步集成 - v1.2.2"""
 from __future__ import annotations
 
+# 确保asyncio模块正确导入 - 这是解决NameError的关键
 import asyncio
 import logging
 import time
@@ -28,9 +29,17 @@ class SimpleSyncCoordinator:
         self._last_sync_time = 0
         self._anti_bounce_interval = 2.0  # 2秒防抖动，防止循环同步
         
+        # 调试信息：确保asyncio模块可用
+        _LOGGER.debug("SimpleSyncCoordinator初始化 - asyncio模块: %s", asyncio)
+        
         # 增强的同步锁机制，防止循环同步
         self._sync_in_progress = False
-        self._sync_lock = asyncio.Lock()
+        try:
+            self._sync_lock = asyncio.Lock()
+            _LOGGER.debug("asyncio.Lock()创建成功")
+        except Exception as e:
+            _LOGGER.error("创建asyncio.Lock()失败: %s", e)
+            raise
         self._sync_source = None  # 跟踪当前同步的源实体
         self._sync_ignore_next = set()  # 忽略下一次状态变化的实体集合
         
