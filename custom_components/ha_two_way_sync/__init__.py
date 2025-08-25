@@ -15,71 +15,164 @@ DOMAIN = "ha_two_way_sync"
 
 
 class SimpleSyncCoordinator:
-    """简化的双向同步协调器 - 专注于实时同步，解决回弹问题"""
+    """简单的双向同步协调器"""
     
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         self.hass = hass
         self.config_entry = config_entry
-        self._config = config_entry.data
-        self.entity1_id: str | None = config_entry.data.get("entity1")
-        self.entity2_id: str | None = config_entry.data.get("entity2")
-        self.enabled: bool = config_entry.data.get("enabled", True)
-        self._unsubscribe_listeners: list = []
+        self.entity1_id = config_entry.data.get("entity1")
+        self.entity2_id = config_entry.data.get("entity2")
+        self.enabled = True
+        self._unsubscribe_listeners: list[Callable[[], None]] = []
+        self._last_sync_time = 0
+        self._anti_bounce_interval = 2.0  # 2秒防抖动，防止循环同步
         
-        # 简化的防重复机制 - 只使用时间戳防止短时间内重复同步
-        self._last_sync_times: dict[str, float] = {}  # 记录每个同步方向的最后执行时间
-        self._anti_bounce_interval: float = 0.05  # 50ms防重复间隔，足够防止回弹又保证实时性
+        # 同步锁机制，防止循环同步
+        self._sync_in_progress = False
+        self._sync_lock = asyncio.Lock()
         
-        # 同步模式配置
-        self._sync_mode: str = config_entry.options.get(
-            "sync_mode", 
-            config_entry.data.get("sync_mode", "perfect")
-        )  # perfect/basic
+        # 状态缓存，避免重复同步相同状态
+        self._last_synced_states = {
+            self.entity1_id: None,
+            self.entity2_id: None
+        }
+        
+        # 同步方向锁定，防止快速反向同步
+        self._sync_direction_lock = None
+        self._sync_direction_lock_time = 0
         
     def _is_state_changed(self, new_state: State, old_state: State | None) -> bool:
-        """检查状态是否发生了有意义的变化 - 简化版本"""
-        if not old_state:
+        """检查状态是否发生有意义的变化，忽略由同步引起的微小变化"""
+        if old_state is None:
             return True
-        
-        # 状态变化
+            
+        # 检查是否是刚刚同步过的状态，避免循环同步
+        entity_id = new_state.entity_id
+        last_synced_state = self._last_synced_states.get(entity_id)
+        if last_synced_state and self._states_are_equivalent(new_state, last_synced_state):
+            _LOGGER.debug(f"忽略同步引起的状态变化: {entity_id}")
+            return False
+            
+        # 状态值变化
         if new_state.state != old_state.state:
             return True
-        
-        # 重要属性变化检测
+            
+        # 检查重要属性变化（针对不同域）
         domain = new_state.domain
-        important_attrs = []
         
         if domain == "light":
-            important_attrs = ["brightness", "color_temp", "rgb_color", "xy_color", "hs_color"]
-        elif domain == "fan":
-            important_attrs = ["speed", "percentage", "preset_mode", "oscillating"]
-        elif domain == "climate":
-            important_attrs = ["temperature", "target_temp_high", "target_temp_low", "hvac_mode", "fan_mode"]
+            # 灯光：检查亮度、色温、颜色等，忽略微小变化
+            important_attrs = ["brightness", "color_temp", "hs_color", "rgb_color", "xy_color"]
+            for attr in important_attrs:
+                old_val = old_state.attributes.get(attr)
+                new_val = new_state.attributes.get(attr)
+                if not self._values_are_equivalent(old_val, new_val, attr):
+                    return True
+                    
+        elif domain in ["fan", "climate"]:
+            # 风扇/空调：检查速度、温度等
+            important_attrs = ["speed", "temperature", "target_temp_high", "target_temp_low"]
+            for attr in important_attrs:
+                old_val = old_state.attributes.get(attr)
+                new_val = new_state.attributes.get(attr)
+                if not self._values_are_equivalent(old_val, new_val, attr):
+                    return True
+                    
         elif domain == "cover":
-            important_attrs = ["position", "tilt_position"]
-        elif domain == "media_player":
-            important_attrs = ["volume_level", "source"]
-        elif domain == "humidifier":
-            important_attrs = ["humidity", "mode"]
-        elif domain == "water_heater":
-            important_attrs = ["temperature", "operation_mode"]
-        
-        # 检查重要属性是否变化
-        for attr in important_attrs:
-            if old_state.attributes.get(attr) != new_state.attributes.get(attr):
+            # 窗帘：检查位置，忽略1%以内的微小变化
+            old_pos = old_state.attributes.get("current_position")
+            new_pos = new_state.attributes.get("current_position")
+            if old_pos is not None and new_pos is not None:
+                if abs(old_pos - new_pos) > 1:  # 忽略1%以内的变化
+                    return True
+            elif old_pos != new_pos:
                 return True
-        
+                
         return False
+        
+    def _values_are_equivalent(self, old_val, new_val, attr_name: str) -> bool:
+        """检查两个值是否等效，忽略微小差异"""
+        if old_val == new_val:
+            return True
+            
+        if old_val is None or new_val is None:
+            return False
+            
+        # 对于数值类型，允许小幅误差
+        if attr_name in ["brightness", "color_temp"]:
+            try:
+                old_num = float(old_val)
+                new_num = float(new_val)
+                # 亮度允许2的误差，色温允许10的误差
+                tolerance = 2 if attr_name == "brightness" else 10
+                return abs(old_num - new_num) <= tolerance
+            except (ValueError, TypeError):
+                return False
+                
+        # 对于颜色值，允许小幅误差
+        if attr_name in ["hs_color", "rgb_color", "xy_color"]:
+            if isinstance(old_val, (list, tuple)) and isinstance(new_val, (list, tuple)):
+                if len(old_val) != len(new_val):
+                    return False
+                try:
+                    for old_component, new_component in zip(old_val, new_val):
+                        if abs(float(old_component) - float(new_component)) > 1:
+                            return False
+                    return True
+                except (ValueError, TypeError):
+                    return False
+                    
+        return False
+        
+    def _states_are_equivalent(self, state1: State, state2: State) -> bool:
+        """检查两个状态是否等效"""
+        if state1.state != state2.state:
+            return False
+            
+        # 检查重要属性
+        domain = state1.domain
+        if domain == "light":
+            important_attrs = ["brightness", "color_temp", "hs_color", "rgb_color", "xy_color"]
+            for attr in important_attrs:
+                if not self._values_are_equivalent(
+                    state1.attributes.get(attr),
+                    state2.attributes.get(attr),
+                    attr
+                ):
+                    return False
+        return True
     
     def _can_sync_now(self, sync_direction: str) -> bool:
-        """检查是否可以立即同步 - 简单的防重复机制"""
+        """检查是否可以执行同步，包含防重复和方向锁定机制"""
         current_time = time.time()
-        last_sync = self._last_sync_times.get(sync_direction, 0)
-        return (current_time - last_sync) > self._anti_bounce_interval
+        
+        # 检查全局防重复间隔
+        if current_time - self._last_sync_time < self._anti_bounce_interval:
+            _LOGGER.debug(f"同步被防重复机制阻止: {sync_direction}")
+            return False
+            
+        # 检查同步方向锁定
+        if self._sync_direction_lock and self._sync_direction_lock != sync_direction:
+            # 如果锁定方向不同，检查是否已过锁定时间
+            if current_time - self._sync_direction_lock_time < 1.0:  # 1秒方向锁定
+                _LOGGER.debug(f"同步被方向锁定阻止: {sync_direction} (当前锁定: {self._sync_direction_lock})")
+                return False
+            else:
+                # 锁定时间已过，清除锁定
+                self._sync_direction_lock = None
+                
+        return True
     
     def _mark_sync_time(self, sync_direction: str) -> None:
-        """记录同步时间"""
-        self._last_sync_times[sync_direction] = time.time()
+        """标记同步时间和方向"""
+        current_time = time.time()
+        self._last_sync_time = current_time
+        
+        # 设置方向锁定
+        self._sync_direction_lock = sync_direction
+        self._sync_direction_lock_time = current_time
+        
+        _LOGGER.debug(f"标记同步时间: {sync_direction} at {current_time}")
         
     async def async_setup(self) -> None:
         """设置同步监听器"""
@@ -124,80 +217,122 @@ class SimpleSyncCoordinator:
         _LOGGER.info(f"双向同步已启用: {self.entity1_id} <-> {self.entity2_id}")
         
     async def _handle_entity1_change(self, event: Event) -> None:
-        """处理实体1的状态变化"""
-        try:
-            new_state = event.data.get("new_state")
-            old_state = event.data.get("old_state")
+        """处理实体1状态变化"""
+        if not self.enabled:
+            return
             
-            if not new_state or not old_state:
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        
+        if not new_state:
+            return
+            
+        sync_direction = f"{self.entity1_id}->{self.entity2_id}"
+        
+        # 检查同步锁
+        if self._sync_in_progress:
+            _LOGGER.debug(f"同步进行中，忽略实体1变化: {self.entity1_id}")
+            return
+            
+        # 检查状态变化
+        if not self._is_state_changed(new_state, old_state):
+            _LOGGER.debug(f"实体1状态无有意义变化: {self.entity1_id}")
+            return
+            
+        # 检查防重复机制
+        if not self._can_sync_now(sync_direction):
+            _LOGGER.debug(f"同步被防重复机制阻止: {sync_direction}")
+            return
+            
+        async with self._sync_lock:
+            if self._sync_in_progress:
+                _LOGGER.debug(f"获取锁后发现同步进行中，跳过: {sync_direction}")
                 return
-            
-            # 检查状态是否真的变化了
-            if not self._is_state_changed(new_state, old_state):
-                return
-            
-            # 检查防重复机制
-            sync_direction = f"{self.entity1_id}->{self.entity2_id}"
-            if not self._can_sync_now(sync_direction):
-                return
-            
-            # 记录同步时间并立即同步
-            self._mark_sync_time(sync_direction)
-            _LOGGER.debug(f"同步触发: {self.entity1_id} -> {self.entity2_id}")
-            await self._instant_sync(new_state, self.entity2_id)
-            
-        except Exception as err:
-            _LOGGER.error(f"处理实体1状态变化失败: {err}")
+                
+            self._sync_in_progress = True
+            try:
+                _LOGGER.info(f"开始同步: {sync_direction} (状态: {new_state.state})")
+                await self._instant_sync(new_state, self.entity2_id)
+                self._mark_sync_time(sync_direction)
+                
+                # 缓存同步后的状态
+                target_state = self.hass.states.get(self.entity2_id)
+                if target_state:
+                    self._last_synced_states[self.entity2_id] = target_state
+                    
+                _LOGGER.info(f"同步完成: {sync_direction}")
+            except Exception as err:
+                _LOGGER.error(f"实体1同步失败: {sync_direction} - {err}", exc_info=True)
+            finally:
+                self._sync_in_progress = False
     
     async def _handle_entity2_change(self, event: Event) -> None:
-        """处理实体2的状态变化"""
-        try:
-            new_state = event.data.get("new_state")
-            old_state = event.data.get("old_state")
+        """处理实体2状态变化"""
+        if not self.enabled:
+            return
             
-            if not new_state or not old_state:
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        
+        if not new_state:
+            return
+            
+        sync_direction = f"{self.entity2_id}->{self.entity1_id}"
+        
+        # 检查同步锁
+        if self._sync_in_progress:
+            _LOGGER.debug(f"同步进行中，忽略实体2变化: {self.entity2_id}")
+            return
+            
+        # 检查状态变化
+        if not self._is_state_changed(new_state, old_state):
+            _LOGGER.debug(f"实体2状态无有意义变化: {self.entity2_id}")
+            return
+            
+        # 检查防重复机制
+        if not self._can_sync_now(sync_direction):
+            _LOGGER.debug(f"同步被防重复机制阻止: {sync_direction}")
+            return
+            
+        async with self._sync_lock:
+            if self._sync_in_progress:
+                _LOGGER.debug(f"获取锁后发现同步进行中，跳过: {sync_direction}")
                 return
-            
-            # 检查状态是否真的变化了
-            if not self._is_state_changed(new_state, old_state):
-                return
-            
-            # 检查防重复机制
-            sync_direction = f"{self.entity2_id}->{self.entity1_id}"
-            if not self._can_sync_now(sync_direction):
-                return
-            
-            # 记录同步时间并立即同步
-            self._mark_sync_time(sync_direction)
-            _LOGGER.debug(f"同步触发: {self.entity2_id} -> {self.entity1_id}")
-            await self._instant_sync(new_state, self.entity1_id)
-            
-        except Exception as err:
-            _LOGGER.error(f"处理实体2状态变化失败: {err}")
+                
+            self._sync_in_progress = True
+            try:
+                _LOGGER.info(f"开始同步: {sync_direction} (状态: {new_state.state})")
+                await self._instant_sync(new_state, self.entity1_id)
+                self._mark_sync_time(sync_direction)
+                
+                # 缓存同步后的状态
+                target_state = self.hass.states.get(self.entity1_id)
+                if target_state:
+                    self._last_synced_states[self.entity1_id] = target_state
+                    
+                _LOGGER.info(f"同步完成: {sync_direction}")
+            except Exception as err:
+                _LOGGER.error(f"实体2同步失败: {sync_direction} - {err}", exc_info=True)
+            finally:
+                self._sync_in_progress = False
     
     async def _instant_sync(self, source_state: State, target_entity_id: str | None) -> None:
-        """立即同步方法 - 一次性同步所有属性，无延迟，无监控"""
+        """立即同步状态 - 使用完美同步模式"""
         if not target_entity_id:
             return
             
         try:
-            # 检查目标实体是否存在
-            target_state = self.hass.states.get(target_entity_id)
-            if not target_state:
-                _LOGGER.error(f"目标实体不存在: {target_entity_id}")
-                return
-                
-            source_domain = source_state.domain
-            target_domain = target_entity_id.split(".")[0]
+            _LOGGER.debug(f"执行立即同步: {source_state.entity_id} -> {target_entity_id}")
+            _LOGGER.debug(f"源状态: {source_state.state}, 属性: {dict(source_state.attributes)}")
             
-            # 根据同步模式选择同步方式
-            if self._sync_mode == "perfect" and source_domain == target_domain:
-                await self._perfect_sync(source_state, target_entity_id)
-            else:
-                await self._basic_sync(source_state, target_entity_id)
+            # 使用完美同步模式，确保所有属性都被正确同步
+            await self._perfect_sync(source_state, target_entity_id)
+            
+            _LOGGER.debug(f"立即同步执行完成: {source_state.entity_id} -> {target_entity_id}")
                 
         except Exception as err:
-            _LOGGER.error(f"立即同步失败: {source_state.entity_id} -> {target_entity_id} - {err}")
+            _LOGGER.error(f"立即同步失败: {source_state.entity_id} -> {target_entity_id} - {err}", exc_info=True)
+            raise
     
     async def _perfect_sync(self, source_state: State, target_entity_id: str) -> None:
         """完美同步 - 一次性同步所有属性"""
@@ -341,30 +476,78 @@ class SimpleSyncCoordinator:
         """手动触发从实体1到实体2的同步"""
         try:
             if not self.entity1_id:
+                _LOGGER.error("手动同步失败: 实体1 ID为空")
                 return False
+                
             entity1_state = self.hass.states.get(self.entity1_id)
             if not entity1_state:
+                _LOGGER.error(f"手动同步失败: 实体1不存在 {self.entity1_id}")
                 return False
             
-            await self._instant_sync(entity1_state, self.entity2_id)
-            return True
+            sync_direction = f"{self.entity1_id}->{self.entity2_id}(手动)"
+            
+            async with self._sync_lock:
+                if self._sync_in_progress:
+                    _LOGGER.warning(f"手动同步被阻止: 同步进行中 {sync_direction}")
+                    return False
+                    
+                self._sync_in_progress = True
+                try:
+                    _LOGGER.info(f"开始手动同步: {sync_direction}")
+                    await self._instant_sync(entity1_state, self.entity2_id)
+                    self._mark_sync_time(sync_direction)
+                    
+                    # 缓存同步后的状态
+                    target_state = self.hass.states.get(self.entity2_id)
+                    if target_state:
+                        self._last_synced_states[self.entity2_id] = target_state
+                        
+                    _LOGGER.info(f"手动同步完成: {sync_direction}")
+                    return True
+                finally:
+                    self._sync_in_progress = False
+                    
         except Exception as e:
-            _LOGGER.error(f"手动同步失败: {e}")
+            _LOGGER.error(f"手动同步失败: {e}", exc_info=True)
             return False
     
     async def manual_sync_entity2_to_entity1(self) -> bool:
         """手动触发从实体2到实体1的同步"""
         try:
             if not self.entity2_id:
+                _LOGGER.error("手动同步失败: 实体2 ID为空")
                 return False
+                
             entity2_state = self.hass.states.get(self.entity2_id)
             if not entity2_state:
+                _LOGGER.error(f"手动同步失败: 实体2不存在 {self.entity2_id}")
                 return False
             
-            await self._instant_sync(entity2_state, self.entity1_id)
-            return True
+            sync_direction = f"{self.entity2_id}->{self.entity1_id}(手动)"
+            
+            async with self._sync_lock:
+                if self._sync_in_progress:
+                    _LOGGER.warning(f"手动同步被阻止: 同步进行中 {sync_direction}")
+                    return False
+                    
+                self._sync_in_progress = True
+                try:
+                    _LOGGER.info(f"开始手动同步: {sync_direction}")
+                    await self._instant_sync(entity2_state, self.entity1_id)
+                    self._mark_sync_time(sync_direction)
+                    
+                    # 缓存同步后的状态
+                    target_state = self.hass.states.get(self.entity1_id)
+                    if target_state:
+                        self._last_synced_states[self.entity1_id] = target_state
+                        
+                    _LOGGER.info(f"手动同步完成: {sync_direction}")
+                    return True
+                finally:
+                    self._sync_in_progress = False
+                    
         except Exception as e:
-            _LOGGER.error(f"手动同步失败: {e}")
+            _LOGGER.error(f"手动同步失败: {e}", exc_info=True)
             return False
     
     async def get_sync_status(self) -> dict[str, Any] | None:
