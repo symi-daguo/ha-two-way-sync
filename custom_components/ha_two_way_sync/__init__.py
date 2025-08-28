@@ -173,24 +173,88 @@ class SimpleSyncCoordinator:
             if domain == "light":
                 # 灯光同步：开关、亮度、色温、颜色
                 if source_state.state == "on":
+                    # 记录调试信息
+                    color_attrs = {}
+                    for color_attr in ["rgb_color", "xy_color", "hs_color", "color_temp", "brightness"]:
+                        if color_attr in source_state.attributes:
+                            color_attrs[color_attr] = source_state.attributes[color_attr]
+                    _LOGGER.debug(f"源实体 {source_state.entity_id} 颜色属性: {color_attrs}")
+                    
                     # 同步亮度
                     if "brightness" in source_state.attributes:
-                        service_data["brightness"] = source_state.attributes["brightness"]
+                        brightness = source_state.attributes["brightness"]
+                        if isinstance(brightness, (int, float)) and 0 <= brightness <= 255:
+                            service_data["brightness"] = brightness
+                            _LOGGER.debug(f"添加亮度: {brightness}")
                     
                     # 同步色温
                     if "color_temp" in source_state.attributes:
-                        service_data["color_temp"] = source_state.attributes["color_temp"]
+                        color_temp = source_state.attributes["color_temp"]
+                        if isinstance(color_temp, (int, float)) and color_temp > 0:
+                            service_data["color_temp"] = color_temp
+                            _LOGGER.debug(f"添加色温: {color_temp}")
                     
-                    # 同步颜色 - 互斥处理，优先级：rgb_color > xy_color > hs_color
-                    # 只添加一种颜色属性，避免 Color descriptors 冲突
-                    if "rgb_color" in source_state.attributes:
-                        service_data["rgb_color"] = source_state.attributes["rgb_color"]
-                    elif "xy_color" in source_state.attributes:
-                        service_data["xy_color"] = source_state.attributes["xy_color"]
-                    elif "hs_color" in source_state.attributes:
-                        service_data["hs_color"] = source_state.attributes["hs_color"]
+                    # 颜色同步 - 验证和清理颜色属性
+                    color_added = False
+                    try:
+                        # 优先级：rgb_color > xy_color > hs_color
+                        if "rgb_color" in source_state.attributes and not color_added:
+                            rgb_color = source_state.attributes["rgb_color"]
+                            if self._validate_rgb_color(rgb_color):
+                                service_data["rgb_color"] = rgb_color
+                                color_added = True
+                                _LOGGER.debug(f"添加RGB颜色: {rgb_color}")
+                            else:
+                                _LOGGER.warning(f"无效的RGB颜色值: {rgb_color}")
+                        
+                        if "xy_color" in source_state.attributes and not color_added:
+                            xy_color = source_state.attributes["xy_color"]
+                            if self._validate_xy_color(xy_color):
+                                service_data["xy_color"] = xy_color
+                                color_added = True
+                                _LOGGER.debug(f"添加XY颜色: {xy_color}")
+                            else:
+                                _LOGGER.warning(f"无效的XY颜色值: {xy_color}")
+                        
+                        if "hs_color" in source_state.attributes and not color_added:
+                            hs_color = source_state.attributes["hs_color"]
+                            if self._validate_hs_color(hs_color):
+                                service_data["hs_color"] = hs_color
+                                color_added = True
+                                _LOGGER.debug(f"添加HS颜色: {hs_color}")
+                            else:
+                                _LOGGER.warning(f"无效的HS颜色值: {hs_color}")
+                                
+                    except Exception as color_error:
+                        _LOGGER.warning(f"颜色属性处理失败: {color_error}，跳过颜色同步")
                     
-                    await self.hass.services.async_call("light", "turn_on", service_data)
+                    _LOGGER.debug(f"最终服务数据: {service_data}")
+                    
+                    # 尝试完整同步
+                    try:
+                        await self.hass.services.async_call("light", "turn_on", service_data)
+                        _LOGGER.debug(f"完整同步成功: {target_entity_id}")
+                    except Exception as sync_error:
+                        if "Color descriptors" in str(sync_error):
+                            _LOGGER.warning(f"颜色冲突错误，尝试不带颜色的同步: {sync_error}")
+                            # 移除所有颜色属性，只保留基本属性
+                            fallback_data = {"entity_id": target_entity_id}
+                            if "brightness" in service_data:
+                                fallback_data["brightness"] = service_data["brightness"]
+                            if "color_temp" in service_data:
+                                fallback_data["color_temp"] = service_data["color_temp"]
+                            
+                            try:
+                                await self.hass.services.async_call("light", "turn_on", fallback_data)
+                                _LOGGER.info(f"降级同步成功（无颜色）: {target_entity_id}")
+                            except Exception as fallback_error:
+                                _LOGGER.error(f"降级同步也失败: {fallback_error}")
+                                # 最后尝试只开灯
+                                basic_data = {"entity_id": target_entity_id}
+                                await self.hass.services.async_call("light", "turn_on", basic_data)
+                                _LOGGER.info(f"基础开关同步: {target_entity_id}")
+                        else:
+                            raise sync_error
                 else:
                     await self.hass.services.async_call("light", "turn_off", service_data)
                     
@@ -254,6 +318,35 @@ class SimpleSyncCoordinator:
                     
         except Exception as e:
             _LOGGER.error(f"完美同步失败 {domain}: {e}")
+            
+    def _validate_rgb_color(self, rgb_color) -> bool:
+        """验证RGB颜色值"""
+        try:
+            if not isinstance(rgb_color, (list, tuple)) or len(rgb_color) != 3:
+                return False
+            return all(isinstance(c, (int, float)) and 0 <= c <= 255 for c in rgb_color)
+        except Exception:
+            return False
+            
+    def _validate_xy_color(self, xy_color) -> bool:
+        """验证XY颜色值"""
+        try:
+            if not isinstance(xy_color, (list, tuple)) or len(xy_color) != 2:
+                return False
+            return all(isinstance(c, (int, float)) and 0 <= c <= 1 for c in xy_color)
+        except Exception:
+            return False
+            
+    def _validate_hs_color(self, hs_color) -> bool:
+        """验证HS颜色值"""
+        try:
+            if not isinstance(hs_color, (list, tuple)) or len(hs_color) != 2:
+                return False
+            h, s = hs_color
+            return (isinstance(h, (int, float)) and 0 <= h <= 360 and 
+                   isinstance(s, (int, float)) and 0 <= s <= 100)
+        except Exception:
+            return False
             
     async def manual_sync(self, direction: str = "1to2") -> bool:
         """手动同步"""
