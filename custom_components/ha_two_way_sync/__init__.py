@@ -134,44 +134,10 @@ class SimpleSyncCoordinator:
         # 没有检测到有意义的变化
         return False
         
-    def _can_sync_now(self) -> bool:
-        """检查是否可以进行同步（简化版）"""
-        import time
-        current_time = time.time()
-        
-        # 简单的频率限制
-        if current_time - self._last_sync_time < self._min_sync_interval:
-            return False
-            
-        # 看门狗检查
-        if self._watchdog_start_time is None:
-            self._watchdog_start_time = current_time
-            self._continuous_sync_count = 0
-        else:
-            # 检查是否超时
-            if current_time - self._watchdog_start_time > self._watchdog_timeout:
-                _LOGGER.warning(f"看门狗超时，强制停止同步防止死循环")
-                self._reset_watchdog()
-                return False
-                
-            # 检查连续同步次数
-            if self._continuous_sync_count >= self._max_continuous_syncs:
-                _LOGGER.warning(f"连续同步次数过多({self._continuous_sync_count})，强制停止防止死循环")
-                self._reset_watchdog()
-                return False
-                
-        return True
-        
     def _reset_watchdog(self) -> None:
         """重置看门狗"""
         self._watchdog_start_time = None
         self._continuous_sync_count = 0
-        
-    def _mark_sync_time(self) -> None:
-        """标记同步时间"""
-        import time
-        self._last_sync_time = time.time()
-        self._continuous_sync_count += 1
         
     def _delayed_clear_ignore(self, entity_id: str, delay: float = 0.5) -> None:
         """延迟清除忽略标记（简化版）"""
@@ -448,7 +414,7 @@ class SimpleSyncCoordinator:
             return
             
         # 看门狗和频率检查
-        if not self._can_sync_now():
+        if not self._can_sync_now(sync_direction):
             _LOGGER.debug(f"同步被阻止: {self.entity1_id}")
             return
             
@@ -485,7 +451,7 @@ class SimpleSyncCoordinator:
             return
             
         # 看门狗和频率检查
-        if not self._can_sync_now():
+        if not self._can_sync_now(sync_direction):
             _LOGGER.debug(f"同步被阻止: {self.entity2_id}")
             return
             
@@ -514,7 +480,7 @@ class SimpleSyncCoordinator:
                 await self._perfect_sync(source_state, target_entity_id)
                 
                 # 标记同步时间（看门狗）
-                self._mark_sync_time()
+                self._mark_sync_time(direction)
                 
                 # 延迟清除忽略标记
                 self._delayed_clear_ignore(target_entity_id)
