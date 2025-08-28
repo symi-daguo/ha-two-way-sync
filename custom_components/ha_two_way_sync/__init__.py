@@ -182,21 +182,13 @@ class SimpleSyncCoordinator:
                         service_data["color_temp"] = source_state.attributes["color_temp"]
                     
                     # 同步颜色 - 互斥处理，优先级：rgb_color > xy_color > hs_color
+                    # 只添加一种颜色属性，避免 Color descriptors 冲突
                     if "rgb_color" in source_state.attributes:
                         service_data["rgb_color"] = source_state.attributes["rgb_color"]
-                        # 明确排除其他颜色属性
-                        service_data.pop("xy_color", None)
-                        service_data.pop("hs_color", None)
                     elif "xy_color" in source_state.attributes:
                         service_data["xy_color"] = source_state.attributes["xy_color"]
-                        # 明确排除其他颜色属性
-                        service_data.pop("rgb_color", None)
-                        service_data.pop("hs_color", None)
                     elif "hs_color" in source_state.attributes:
                         service_data["hs_color"] = source_state.attributes["hs_color"]
-                        # 明确排除其他颜色属性
-                        service_data.pop("rgb_color", None)
-                        service_data.pop("xy_color", None)
                     
                     await self.hass.services.async_call("light", "turn_on", service_data)
                 else:
