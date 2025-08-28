@@ -41,13 +41,9 @@ class SimpleSyncCoordinator:
         self.enabled = True
         self._unsubscribe_listeners: list[Callable[[], None]] = []
         
-        # 调试信息：确保asyncio模块可用
-        _LOGGER.debug("SimpleSyncCoordinator初始化 - asyncio模块: %s", asyncio)
-        
         # 极简的同步控制 - 只保留基本同步锁
         try:
             self._sync_lock = asyncio.Lock()
-            _LOGGER.debug("asyncio.Lock()创建成功")
         except Exception as e:
             _LOGGER.error("创建asyncio.Lock()失败: %s", e)
             raise
@@ -78,15 +74,12 @@ class SimpleSyncCoordinator:
             _LOGGER.error(f"实体2不存在: {self.entity2_id}")
             return
             
-        _LOGGER.info(f"双向同步设置: {self.entity1_id}({entity1_state.state}) <-> {self.entity2_id}({entity2_state.state})")
-            
         # 监听两个实体的状态变化
         try:
             listener1 = async_track_state_change_event(
                 self.hass, [self.entity1_id], self._handle_entity1_change
             )
             self._unsubscribe_listeners.append(listener1)
-            _LOGGER.debug(f"实体1监听器注册成功: {self.entity1_id}")
         except Exception as e:
             _LOGGER.error(f"实体1监听器注册失败: {self.entity1_id} - {e}")
             return
@@ -96,12 +89,9 @@ class SimpleSyncCoordinator:
                 self.hass, [self.entity2_id], self._handle_entity2_change
             )
             self._unsubscribe_listeners.append(listener2)
-            _LOGGER.debug(f"实体2监听器注册成功: {self.entity2_id}")
         except Exception as e:
             _LOGGER.error(f"实体2监听器注册失败: {self.entity2_id} - {e}")
             return
-        
-        _LOGGER.info(f"双向同步已启用: {self.entity1_id} <-> {self.entity2_id}")
         
     async def _handle_entity1_change(self, event: Event) -> None:
         """处理实体1状态变化 - 极简版"""
@@ -116,7 +106,6 @@ class SimpleSyncCoordinator:
             
         # 检查是否是同步引起的变化
         if self._is_sync_caused_change(self.entity1_id):
-            _LOGGER.debug(f"忽略同步引起的变化: {self.entity1_id}")
             return
             
         # 执行同步
@@ -135,7 +124,6 @@ class SimpleSyncCoordinator:
             
         # 检查是否是同步引起的变化
         if self._is_sync_caused_change(self.entity2_id):
-            _LOGGER.debug(f"忽略同步引起的变化: {self.entity2_id}")
             return
             
         # 执行同步
@@ -148,8 +136,6 @@ class SimpleSyncCoordinator:
                 # 更新同步时间戳
                 self._last_sync_time = time.time()
                 
-                _LOGGER.info(f"开始同步: {source_state.entity_id} -> {target_entity_id}")
-                
                 # 获取目标实体当前状态
                 target_state = self.hass.states.get(target_entity_id)
                 if not target_state:
@@ -158,8 +144,6 @@ class SimpleSyncCoordinator:
                 
                 # 执行完美同步
                 await self._perfect_sync(source_state, target_entity_id)
-                
-                _LOGGER.info(f"同步完成: {source_state.entity_id} -> {target_entity_id}")
                 
             except Exception as e:
                 _LOGGER.error(f"同步失败: {source_state.entity_id} -> {target_entity_id}: {e}")
@@ -171,90 +155,17 @@ class SimpleSyncCoordinator:
         
         try:
             if domain == "light":
-                # 灯光同步：开关、亮度、色温、颜色
+                # 灯光同步：开关、亮度、色温（跳过颜色避免冲突）
                 if source_state.state == "on":
-                    # 记录调试信息
-                    color_attrs = {}
-                    for color_attr in ["rgb_color", "xy_color", "hs_color", "color_temp", "brightness"]:
-                        if color_attr in source_state.attributes:
-                            color_attrs[color_attr] = source_state.attributes[color_attr]
-                    _LOGGER.debug(f"源实体 {source_state.entity_id} 颜色属性: {color_attrs}")
-                    
                     # 同步亮度
                     if "brightness" in source_state.attributes:
-                        brightness = source_state.attributes["brightness"]
-                        if isinstance(brightness, (int, float)) and 0 <= brightness <= 255:
-                            service_data["brightness"] = brightness
-                            _LOGGER.debug(f"添加亮度: {brightness}")
+                        service_data["brightness"] = source_state.attributes["brightness"]
                     
                     # 同步色温
                     if "color_temp" in source_state.attributes:
-                        color_temp = source_state.attributes["color_temp"]
-                        if isinstance(color_temp, (int, float)) and color_temp > 0:
-                            service_data["color_temp"] = color_temp
-                            _LOGGER.debug(f"添加色温: {color_temp}")
+                        service_data["color_temp"] = source_state.attributes["color_temp"]
                     
-                    # 颜色同步 - 验证和清理颜色属性
-                    color_added = False
-                    try:
-                        # 优先级：rgb_color > xy_color > hs_color
-                        if "rgb_color" in source_state.attributes and not color_added:
-                            rgb_color = source_state.attributes["rgb_color"]
-                            if self._validate_rgb_color(rgb_color):
-                                service_data["rgb_color"] = rgb_color
-                                color_added = True
-                                _LOGGER.debug(f"添加RGB颜色: {rgb_color}")
-                            else:
-                                _LOGGER.warning(f"无效的RGB颜色值: {rgb_color}")
-                        
-                        if "xy_color" in source_state.attributes and not color_added:
-                            xy_color = source_state.attributes["xy_color"]
-                            if self._validate_xy_color(xy_color):
-                                service_data["xy_color"] = xy_color
-                                color_added = True
-                                _LOGGER.debug(f"添加XY颜色: {xy_color}")
-                            else:
-                                _LOGGER.warning(f"无效的XY颜色值: {xy_color}")
-                        
-                        if "hs_color" in source_state.attributes and not color_added:
-                            hs_color = source_state.attributes["hs_color"]
-                            if self._validate_hs_color(hs_color):
-                                service_data["hs_color"] = hs_color
-                                color_added = True
-                                _LOGGER.debug(f"添加HS颜色: {hs_color}")
-                            else:
-                                _LOGGER.warning(f"无效的HS颜色值: {hs_color}")
-                                
-                    except Exception as color_error:
-                        _LOGGER.warning(f"颜色属性处理失败: {color_error}，跳过颜色同步")
-                    
-                    _LOGGER.debug(f"最终服务数据: {service_data}")
-                    
-                    # 尝试完整同步
-                    try:
-                        await self.hass.services.async_call("light", "turn_on", service_data)
-                        _LOGGER.debug(f"完整同步成功: {target_entity_id}")
-                    except Exception as sync_error:
-                        if "Color descriptors" in str(sync_error):
-                            _LOGGER.warning(f"颜色冲突错误，尝试不带颜色的同步: {sync_error}")
-                            # 移除所有颜色属性，只保留基本属性
-                            fallback_data = {"entity_id": target_entity_id}
-                            if "brightness" in service_data:
-                                fallback_data["brightness"] = service_data["brightness"]
-                            if "color_temp" in service_data:
-                                fallback_data["color_temp"] = service_data["color_temp"]
-                            
-                            try:
-                                await self.hass.services.async_call("light", "turn_on", fallback_data)
-                                _LOGGER.info(f"降级同步成功（无颜色）: {target_entity_id}")
-                            except Exception as fallback_error:
-                                _LOGGER.error(f"降级同步也失败: {fallback_error}")
-                                # 最后尝试只开灯
-                                basic_data = {"entity_id": target_entity_id}
-                                await self.hass.services.async_call("light", "turn_on", basic_data)
-                                _LOGGER.info(f"基础开关同步: {target_entity_id}")
-                        else:
-                            raise sync_error
+                    await self.hass.services.async_call("light", "turn_on", service_data)
                 else:
                     await self.hass.services.async_call("light", "turn_off", service_data)
                     
@@ -319,34 +230,7 @@ class SimpleSyncCoordinator:
         except Exception as e:
             _LOGGER.error(f"完美同步失败 {domain}: {e}")
             
-    def _validate_rgb_color(self, rgb_color) -> bool:
-        """验证RGB颜色值"""
-        try:
-            if not isinstance(rgb_color, (list, tuple)) or len(rgb_color) != 3:
-                return False
-            return all(isinstance(c, (int, float)) and 0 <= c <= 255 for c in rgb_color)
-        except Exception:
-            return False
-            
-    def _validate_xy_color(self, xy_color) -> bool:
-        """验证XY颜色值"""
-        try:
-            if not isinstance(xy_color, (list, tuple)) or len(xy_color) != 2:
-                return False
-            return all(isinstance(c, (int, float)) and 0 <= c <= 1 for c in xy_color)
-        except Exception:
-            return False
-            
-    def _validate_hs_color(self, hs_color) -> bool:
-        """验证HS颜色值"""
-        try:
-            if not isinstance(hs_color, (list, tuple)) or len(hs_color) != 2:
-                return False
-            h, s = hs_color
-            return (isinstance(h, (int, float)) and 0 <= h <= 360 and 
-                   isinstance(s, (int, float)) and 0 <= s <= 100)
-        except Exception:
-            return False
+
             
     async def manual_sync(self, direction: str = "1to2") -> bool:
         """手动同步"""
@@ -392,7 +276,7 @@ class SimpleSyncCoordinator:
         for unsubscribe in self._unsubscribe_listeners:
             unsubscribe()
         self._unsubscribe_listeners.clear()
-        _LOGGER.info(f"双向同步已卸载: {self.entity1_id} <-> {self.entity2_id}")
+        pass
 
 # 全局同步器实例
 _sync_coordinators: dict[str, SimpleSyncCoordinator] = {}
@@ -417,7 +301,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         if entry_id in _sync_coordinators:
             success = await _sync_coordinators[entry_id].manual_sync(direction)
-            _LOGGER.info(f"手动同步 {'成功' if success else '失败'}: {entry_id} ({direction})")
+            if not success:
+                _LOGGER.error(f"手动同步失败: {entry_id} ({direction})")
         else:
             _LOGGER.error(f"未找到同步器: {entry_id}")
     
@@ -427,7 +312,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         if entry_id in _sync_coordinators:
             status = _sync_coordinators[entry_id].get_sync_status()
-            _LOGGER.info(f"同步状态: {status}")
+            pass
         else:
             _LOGGER.error(f"未找到同步器: {entry_id}")
     
