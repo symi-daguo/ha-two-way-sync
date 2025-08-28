@@ -165,82 +165,24 @@ class SimpleSyncCoordinator:
                 _LOGGER.error(f"同步失败: {source_state.entity_id} -> {target_entity_id}: {e}")
                 
     async def _perfect_sync(self, source_state: State, target_entity_id: str) -> None:
-        """完美同步 - 同步所有状态和属性"""
+        """简单同步 - 只同步开关状态"""
         domain = source_state.domain
         service_data = {"entity_id": target_entity_id}
         
         try:
-            if domain == "light":
-                if source_state.state == "on":
-                    # 开灯并同步所有属性
-                    attrs = source_state.attributes
-                    if "brightness" in attrs:
-                        service_data["brightness"] = attrs["brightness"]
-                    if "color_temp" in attrs:
-                        service_data["color_temp"] = attrs["color_temp"]
-                    if "rgb_color" in attrs:
-                        service_data["rgb_color"] = attrs["rgb_color"]
-                    if "xy_color" in attrs:
-                        service_data["xy_color"] = attrs["xy_color"]
-                    if "hs_color" in attrs:
-                        service_data["hs_color"] = attrs["hs_color"]
-                    if "effect" in attrs:
-                        service_data["effect"] = attrs["effect"]
-                    
-                    await self.hass.services.async_call("light", "turn_on", service_data)
-                else:
-                    await self.hass.services.async_call("light", "turn_off", service_data)
-                    
-            elif domain == "switch":
+            # 所有设备类型都只同步基本的开关状态
+            if source_state.state in ["on", "off"]:
                 service = "turn_on" if source_state.state == "on" else "turn_off"
-                await self.hass.services.async_call("switch", service, service_data)
-                
+                await self.hass.services.async_call(domain, service, service_data)
             elif domain == "cover":
+                # 窗帘特殊处理
                 if source_state.state == "open":
                     await self.hass.services.async_call("cover", "open_cover", service_data)
                 elif source_state.state == "closed":
                     await self.hass.services.async_call("cover", "close_cover", service_data)
-                else:
-                    # 同步位置
-                    position = source_state.attributes.get("current_position")
-                    if position is not None:
-                        service_data["position"] = position
-                        await self.hass.services.async_call("cover", "set_cover_position", service_data)
-                        
-            elif domain == "fan":
-                if source_state.state == "on":
-                    attrs = source_state.attributes
-                    if "percentage" in attrs:
-                        service_data["percentage"] = attrs["percentage"]
-                    if "preset_mode" in attrs:
-                        service_data["preset_mode"] = attrs["preset_mode"]
-                    await self.hass.services.async_call("fan", "turn_on", service_data)
-                else:
-                    await self.hass.services.async_call("fan", "turn_off", service_data)
-                    
-            elif domain == "climate":
-                attrs = source_state.attributes
-                if "temperature" in attrs:
-                    service_data["temperature"] = attrs["temperature"]
-                if "target_temp_high" in attrs:
-                    service_data["target_temp_high"] = attrs["target_temp_high"]
-                if "target_temp_low" in attrs:
-                    service_data["target_temp_low"] = attrs["target_temp_low"]
-                if "hvac_mode" in attrs:
-                    service_data["hvac_mode"] = attrs["hvac_mode"]
-                if "fan_mode" in attrs:
-                    service_data["fan_mode"] = attrs["fan_mode"]
-                    
-                await self.hass.services.async_call("climate", "set_temperature", service_data)
-                
-            else:
-                # 对于其他类型，尝试基本的开关操作
-                if source_state.state in ["on", "off"]:
-                    service = "turn_on" if source_state.state == "on" else "turn_off"
-                    await self.hass.services.async_call(domain, service, service_data)
                     
         except Exception as e:
-            _LOGGER.error(f"完美同步失败 {domain}: {e}")
+            _LOGGER.error(f"简单同步失败 {domain}: {e}")
             
     async def manual_sync(self, direction: str = "1to2") -> bool:
         """手动同步"""
