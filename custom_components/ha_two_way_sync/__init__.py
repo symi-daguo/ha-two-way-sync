@@ -165,24 +165,90 @@ class SimpleSyncCoordinator:
                 _LOGGER.error(f"同步失败: {source_state.entity_id} -> {target_entity_id}: {e}")
                 
     async def _perfect_sync(self, source_state: State, target_entity_id: str) -> None:
-        """简单同步 - 只同步开关状态"""
+        """完美同步 - 主动作从跟随，包括所有属性"""
         domain = source_state.domain
         service_data = {"entity_id": target_entity_id}
         
         try:
-            # 所有设备类型都只同步基本的开关状态
-            if source_state.state in ["on", "off"]:
-                service = "turn_on" if source_state.state == "on" else "turn_off"
-                await self.hass.services.async_call(domain, service, service_data)
+            if domain == "light":
+                # 灯光同步：开关、亮度、色温、颜色
+                if source_state.state == "on":
+                    # 同步亮度
+                    if "brightness" in source_state.attributes:
+                        service_data["brightness"] = source_state.attributes["brightness"]
+                    
+                    # 同步色温
+                    if "color_temp" in source_state.attributes:
+                        service_data["color_temp"] = source_state.attributes["color_temp"]
+                    
+                    # 同步颜色 - 只使用 rgb_color 避免冲突
+                    if "rgb_color" in source_state.attributes:
+                        service_data["rgb_color"] = source_state.attributes["rgb_color"]
+                    
+                    await self.hass.services.async_call("light", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("light", "turn_off", service_data)
+                    
             elif domain == "cover":
-                # 窗帘特殊处理
-                if source_state.state == "open":
+                # 窗帘同步：开关、位置、倾斜
+                if source_state.state in ["open", "opening"]:
                     await self.hass.services.async_call("cover", "open_cover", service_data)
-                elif source_state.state == "closed":
+                elif source_state.state in ["closed", "closing"]:
                     await self.hass.services.async_call("cover", "close_cover", service_data)
+                else:
+                    # 同步位置
+                    if "current_position" in source_state.attributes:
+                        service_data["position"] = source_state.attributes["current_position"]
+                        await self.hass.services.async_call("cover", "set_cover_position", service_data)
+                    
+                    # 同步倾斜位置
+                    if "current_tilt_position" in source_state.attributes:
+                        tilt_data = {"entity_id": target_entity_id, "tilt_position": source_state.attributes["current_tilt_position"]}
+                        await self.hass.services.async_call("cover", "set_cover_tilt_position", tilt_data)
+                        
+            elif domain == "fan":
+                # 风扇同步：开关、速度、百分比
+                if source_state.state == "on":
+                    # 同步速度百分比
+                    if "percentage" in source_state.attributes:
+                        service_data["percentage"] = source_state.attributes["percentage"]
+                    # 同步预设模式
+                    elif "preset_mode" in source_state.attributes:
+                        service_data["preset_mode"] = source_state.attributes["preset_mode"]
+                    
+                    await self.hass.services.async_call("fan", "turn_on", service_data)
+                else:
+                    await self.hass.services.async_call("fan", "turn_off", service_data)
+                    
+            elif domain == "climate":
+                # 空调同步：模式、温度、风扇模式
+                # 同步温度
+                if "temperature" in source_state.attributes:
+                    service_data["temperature"] = source_state.attributes["temperature"]
+                
+                # 同步模式
+                if source_state.state != "unknown":
+                    service_data["hvac_mode"] = source_state.state
+                
+                # 同步风扇模式
+                if "fan_mode" in source_state.attributes:
+                    service_data["fan_mode"] = source_state.attributes["fan_mode"]
+                
+                await self.hass.services.async_call("climate", "set_hvac_mode", service_data)
+                
+                # 单独设置温度（如果有）
+                if "temperature" in service_data:
+                    temp_data = {"entity_id": target_entity_id, "temperature": service_data["temperature"]}
+                    await self.hass.services.async_call("climate", "set_temperature", temp_data)
+                    
+            else:
+                # 其他设备类型：基本开关同步
+                if source_state.state in ["on", "off"]:
+                    service = "turn_on" if source_state.state == "on" else "turn_off"
+                    await self.hass.services.async_call(domain, service, service_data)
                     
         except Exception as e:
-            _LOGGER.error(f"简单同步失败 {domain}: {e}")
+            _LOGGER.error(f"完美同步失败 {domain}: {e}")
             
     async def manual_sync(self, direction: str = "1to2") -> bool:
         """手动同步"""
