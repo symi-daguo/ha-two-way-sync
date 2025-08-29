@@ -1,4 +1,4 @@
-"""Home Assistant 双向同步集成 v1.3.4
+"""Home Assistant 双向同步集成 v1.3.5
 
 这个集成允许两个实体之间进行双向状态同步。
 当一个实体的状态发生变化时，另一个实体会自动同步到相同的状态。
@@ -11,9 +11,10 @@
 - 完美同步模式，确保所有属性都被正确同步
 - 支持手动同步和状态查询
 - 长期稳定运行保障机制
+- 修复异步锁使用错误，确保同步功能正常工作
 
 作者: Assistant
-版本: v1.3.4
+版本: v1.3.5
 """
 from __future__ import annotations
 
@@ -275,42 +276,42 @@ class SimpleSyncCoordinator:
         
         try:
             # 使用超时锁防止死锁
-            async with asyncio.wait_for(self._sync_lock.acquire(), timeout=self._lock_timeout):
-                try:
-                    # 更新统计
-                    self._sync_stats["total_syncs"] += 1
+            await asyncio.wait_for(self._sync_lock.acquire(), timeout=self._lock_timeout)
+            try:
+                # 更新统计
+                self._sync_stats["total_syncs"] += 1
+                
+                # 防止循环同步
+                self._last_sync_time = time.time()
+                
+                # 检查实体可用性
+                if not await self._check_entity_availability(source_state.entity_id, target_entity_id):
+                    self._sync_stats["failed_syncs"] += 1
+                    return
+                
+                # 带重试的同步
+                sync_successful = False
+                for attempt in range(self._sync_retry_count):
+                    try:
+                        await self._perfect_sync(source_state, target_entity_id)
+                        _LOGGER.debug(f"同步成功: {source_state.entity_id} -> {target_entity_id} (尝试 {attempt + 1})")
+                        sync_successful = True
+                        break
+                    except Exception as e:
+                        _LOGGER.warning(f"同步失败 (尝试 {attempt + 1}/{self._sync_retry_count}): {source_state.entity_id} -> {target_entity_id} - {e}")
+                        if attempt < self._sync_retry_count - 1:
+                            await asyncio.sleep(self._sync_retry_delay)
+                        else:
+                            _LOGGER.error(f"同步最终失败: {source_state.entity_id} -> {target_entity_id}")
+                
+                # 更新统计
+                if sync_successful:
+                    self._sync_stats["successful_syncs"] += 1
+                else:
+                    self._sync_stats["failed_syncs"] += 1
                     
-                    # 防止循环同步
-                    self._last_sync_time = time.time()
-                    
-                    # 检查实体可用性
-                    if not await self._check_entity_availability(source_state.entity_id, target_entity_id):
-                        self._sync_stats["failed_syncs"] += 1
-                        return
-                    
-                    # 带重试的同步
-                    sync_successful = False
-                    for attempt in range(self._sync_retry_count):
-                        try:
-                            await self._perfect_sync(source_state, target_entity_id)
-                            _LOGGER.debug(f"同步成功: {source_state.entity_id} -> {target_entity_id} (尝试 {attempt + 1})")
-                            sync_successful = True
-                            break
-                        except Exception as e:
-                            _LOGGER.warning(f"同步失败 (尝试 {attempt + 1}/{self._sync_retry_count}): {source_state.entity_id} -> {target_entity_id} - {e}")
-                            if attempt < self._sync_retry_count - 1:
-                                await asyncio.sleep(self._sync_retry_delay)
-                            else:
-                                _LOGGER.error(f"同步最终失败: {source_state.entity_id} -> {target_entity_id}")
-                    
-                    # 更新统计
-                    if sync_successful:
-                        self._sync_stats["successful_syncs"] += 1
-                    else:
-                        self._sync_stats["failed_syncs"] += 1
-                        
-                finally:
-                    self._sync_lock.release()
+            finally:
+                self._sync_lock.release()
                     
         except asyncio.TimeoutError:
             _LOGGER.error(f"同步锁超时: {source_state.entity_id} -> {target_entity_id}")
