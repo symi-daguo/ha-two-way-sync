@@ -1,4 +1,4 @@
-"""Home Assistant 双向同步集成 v1.3.6
+"""Home Assistant 双向同步集成 v1.3.5
 
 这个集成允许两个实体之间进行双向状态同步。
 当一个实体的状态发生变化时，另一个实体会自动同步到相同的状态。
@@ -11,17 +11,17 @@
 - 完美同步模式，确保所有属性都被正确同步
 - 支持手动同步和状态查询
 - 长期稳定运行保障机制
-- 修复异步锁使用错误，增强重启后稳定性，添加启动延迟和延迟重试机制
+- 修复异步锁使用错误，确保同步功能正常工作
 
 作者: Assistant
-版本: v1.3.6
+版本: v1.3.5
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 from homeassistant.core import HomeAssistant, Event, State
 from homeassistant.helpers.event import async_track_state_change_event
@@ -31,6 +31,19 @@ from homeassistant.config_entries import ConfigEntry
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
+VERSION = "1.3.7"
+
+# 集成信息
+INTEGRATION_INFO = {
+    "name": "HA Two Way Sync",
+    "version": VERSION,
+    "description": "极简的双向同步协调器",
+    "features": [
+        "极简的主从跟随机制",
+        "修复异步锁使用错误",
+        "轻量级重启容错机制"
+    ]
+}
 
 class SimpleSyncCoordinator:
     """极简的双向同步协调器 - 主从跟随版"""
@@ -54,17 +67,15 @@ class SimpleSyncCoordinator:
         self._last_sync_time = 0
         self._sync_cooldown = 0.1  # 100ms冷却时间
         
-        # 实体检查配置（增强重启后稳定性）
-        self._entity_check_retries = 10  # 增加重试次数
-        self._entity_check_delay = 5.0   # 延长重试间隔
-        self._startup_delay = 30.0       # 启动延迟，等待HA完全加载  # 2秒延迟重试
+        # 实体存在性检查和重试机制
+        self._entity_check_retries = 3
+        self._entity_check_delay = 2.0  # 2秒延迟重试
         self._health_check_interval = 300  # 5分钟健康检查
         self._last_health_check = 0
         
-        # 同步失败重试机制（增强稳定性）
-        self._sync_retry_count = 5      # 增加重试次数
-        self._sync_retry_delay = 2.0    # 基础重试延迟
-        self._sync_max_delay = 30.0     # 最大重试延迟
+        # 同步失败重试机制
+        self._sync_retry_count = 2
+        self._sync_retry_delay = 1.0
         self._last_health_check = 0  # 上次健康检查时间
         
         # 性能监控
@@ -83,20 +94,14 @@ class SimpleSyncCoordinator:
         return current_time - self._last_sync_time < self._sync_cooldown
         
     async def async_setup(self) -> None:
-        """设置同步监听器（增强版，支持重启后稳定恢复）"""
+        """设置同步监听器（增强版）"""
         if not self.enabled or not self.entity1_id or not self.entity2_id:
             _LOGGER.warning(f"同步设置跳过: enabled={self.enabled}, entity1={self.entity1_id}, entity2={self.entity2_id}")
             return
             
-        # 启动延迟，等待Home Assistant完全加载所有实体
-        _LOGGER.info(f"等待 {self._startup_delay} 秒，确保所有实体完全加载...")
-        await asyncio.sleep(self._startup_delay)
-        
         # 增强的实体存在性检查（带重试机制）
         if not await self._check_entities_with_retry():
             _LOGGER.error(f"实体检查失败，无法设置同步: {self.entity1_id} <-> {self.entity2_id}")
-            # 即使失败也安排后续重试
-            self._schedule_delayed_setup()
             return
             
         # 监听两个实体的状态变化
@@ -107,30 +112,8 @@ class SimpleSyncCoordinator:
         
         _LOGGER.info(f"双向同步已启动: {self.entity1_id} <-> {self.entity2_id}")
         
-    def _schedule_delayed_setup(self) -> None:
-        """安排延迟重试设置（用于重启后恢复）"""
-        async def delayed_setup():
-            _LOGGER.info(f"安排延迟重试设置，等待 {self._startup_delay * 2} 秒...")
-            await asyncio.sleep(self._startup_delay * 2)  # 双倍延迟
-            
-            if not self.enabled:
-                return
-                
-            _LOGGER.info("开始延迟重试设置...")
-            if await self._check_entities_with_retry():
-                await self._setup_listeners()
-                self._schedule_health_check()
-                _LOGGER.info(f"延迟重试成功，双向同步已启动: {self.entity1_id} <-> {self.entity2_id}")
-            else:
-                _LOGGER.error("延迟重试仍然失败，请检查实体配置")
-                
-        # 使用Home Assistant的事件循环安排延迟设置
-        self.hass.async_create_task(delayed_setup())
-        
     async def _check_entities_with_retry(self) -> bool:
-        """带重试机制的实体存在性检查（增强重启后稳定性）"""
-        _LOGGER.info(f"开始实体检查，最多重试 {self._entity_check_retries} 次，间隔 {self._entity_check_delay} 秒")
-        
+        """带重试机制的实体存在性检查"""
         for attempt in range(self._entity_check_retries):
             entity1_state = self.hass.states.get(self.entity1_id)
             entity2_state = self.hass.states.get(self.entity2_id)
@@ -140,36 +123,23 @@ class SimpleSyncCoordinator:
             entity1_entry = entity_registry.async_get(self.entity1_id)
             entity2_entry = entity_registry.async_get(self.entity2_id)
             
-            # 详细的实体状态检查
-            entity1_available = entity1_state and entity1_state.state != "unavailable"
-            entity2_available = entity2_state and entity2_state.state != "unavailable"
-            
-            if entity1_available and entity2_available:
-                _LOGGER.info(f"实体检查成功 (尝试 {attempt + 1}/{self._entity_check_retries})")
-                _LOGGER.debug(f"实体1状态: {entity1_state.state}, 实体2状态: {entity2_state.state}")
+            if entity1_state and entity2_state:
+                _LOGGER.debug(f"实体检查成功 (尝试 {attempt + 1}/{self._entity_check_retries})")
                 return True
                 
-            # 详细的错误信息
             if not entity1_entry:
                 _LOGGER.warning(f"实体1未在注册表中找到: {self.entity1_id}")
             if not entity2_entry:
                 _LOGGER.warning(f"实体2未在注册表中找到: {self.entity2_id}")
                 
             if not entity1_state:
-                _LOGGER.warning(f"实体1状态不存在: {self.entity1_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
-            elif entity1_state.state == "unavailable":
                 _LOGGER.warning(f"实体1状态不可用: {self.entity1_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
-                
             if not entity2_state:
-                _LOGGER.warning(f"实体2状态不存在: {self.entity2_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
-            elif entity2_state.state == "unavailable":
                 _LOGGER.warning(f"实体2状态不可用: {self.entity2_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
                 
             if attempt < self._entity_check_retries - 1:
                 _LOGGER.info(f"等待 {self._entity_check_delay} 秒后重试...")
                 await asyncio.sleep(self._entity_check_delay)
-            else:
-                _LOGGER.error(f"所有重试已用尽，实体检查最终失败")
                 
         return False
         
@@ -314,62 +284,63 @@ class SimpleSyncCoordinator:
         await self._instant_sync(new_state, self.entity1_id)
         
     async def _instant_sync(self, source_state: State, target_entity_id: str) -> None:
-        """即时同步 - 带锁和增强重试机制"""
-        if not self.enabled:
-            return
-            
+        """极简的即时同步 - 主动作是什么，从就立刻做什么（增强版）"""
         sync_start_time = time.time()
         
         try:
             # 使用超时锁防止死锁
             await asyncio.wait_for(self._sync_lock.acquire(), timeout=self._lock_timeout)
-            
             try:
+                # 更新统计
+                self._sync_stats["total_syncs"] += 1
+                
+                # 防止循环同步
+                self._last_sync_time = time.time()
+                
                 # 检查实体可用性
                 if not await self._check_entity_availability(source_state.entity_id, target_entity_id):
                     self._sync_stats["failed_syncs"] += 1
                     return
-                    
-                # 执行同步（带指数退避重试）
-                for attempt in range(self._sync_retry_count + 1):
+                
+                # 带重试的同步
+                sync_successful = False
+                for attempt in range(self._sync_retry_count):
                     try:
                         await self._perfect_sync(source_state, target_entity_id)
-                        
-                        # 更新统计信息
-                        self._last_sync_time = time.time()
-                        sync_duration = self._last_sync_time - sync_start_time
-                        
-                        self._sync_stats["total_syncs"] += 1
-                        self._sync_stats["successful_syncs"] += 1
-                        self._sync_stats["last_sync_duration"] = sync_duration
-                        
-                        # 更新平均同步时间
-                        total_time = self._sync_stats["avg_sync_time"] * (self._sync_stats["successful_syncs"] - 1) + sync_duration
-                        self._sync_stats["avg_sync_time"] = total_time / self._sync_stats["successful_syncs"]
-                        
-                        _LOGGER.debug(f"同步成功: {source_state.entity_id} -> {target_entity_id} (耗时: {sync_duration:.3f}s)")
+                        _LOGGER.debug(f"同步成功: {source_state.entity_id} -> {target_entity_id} (尝试 {attempt + 1})")
+                        sync_successful = True
                         break
-                        
                     except Exception as e:
-                        if attempt < self._sync_retry_count:
-                            # 指数退避延迟：2^attempt * base_delay，但不超过最大延迟
-                            delay = min(self._sync_retry_delay * (2 ** attempt), self._sync_max_delay)
-                            _LOGGER.warning(f"同步重试 {attempt + 1}/{self._sync_retry_count}: {e}，等待 {delay:.1f}s")
-                            await asyncio.sleep(delay)
+                        _LOGGER.warning(f"同步失败 (尝试 {attempt + 1}/{self._sync_retry_count}): {source_state.entity_id} -> {target_entity_id} - {e}")
+                        if attempt < self._sync_retry_count - 1:
+                            await asyncio.sleep(self._sync_retry_delay)
                         else:
-                            _LOGGER.error(f"同步最终失败: {source_state.entity_id} -> {target_entity_id} - {e}")
-                            self._sync_stats["failed_syncs"] += 1
-                            raise
-                            
+                            _LOGGER.error(f"同步最终失败: {source_state.entity_id} -> {target_entity_id}")
+                
+                # 更新统计
+                if sync_successful:
+                    self._sync_stats["successful_syncs"] += 1
+                else:
+                    self._sync_stats["failed_syncs"] += 1
+                    
             finally:
                 self._sync_lock.release()
-                
+                    
         except asyncio.TimeoutError:
             _LOGGER.error(f"同步锁超时: {source_state.entity_id} -> {target_entity_id}")
             self._sync_stats["failed_syncs"] += 1
         except Exception as e:
-            _LOGGER.error(f"同步异常: {source_state.entity_id} -> {target_entity_id} - {e}")
+            _LOGGER.error(f"同步失败: {source_state.entity_id} -> {target_entity_id}: {e}")
             self._sync_stats["failed_syncs"] += 1
+        finally:
+            # 更新性能统计
+            sync_duration = time.time() - sync_start_time
+            self._sync_stats["last_sync_duration"] = sync_duration
+            
+            # 计算平均同步时间
+            if self._sync_stats["total_syncs"] > 0:
+                total_time = (self._sync_stats["avg_sync_time"] * (self._sync_stats["total_syncs"] - 1) + sync_duration)
+                self._sync_stats["avg_sync_time"] = total_time / self._sync_stats["total_syncs"]
                 
     async def _check_entity_availability(self, source_entity_id: str, target_entity_id: str) -> bool:
         """检查实体可用性"""
@@ -539,7 +510,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = SimpleSyncCoordinator(hass, entry)
     _sync_coordinators[entry.entry_id] = coordinator
     
-    await coordinator.async_setup()
+    # 轻量级重启容错：如果初始设置失败，延迟重试一次
+    try:
+        await coordinator.async_setup()
+    except Exception as e:
+        _LOGGER.warning(f"初始设置失败，5秒后重试: {e}")
+        await asyncio.sleep(5)
+        try:
+            await coordinator.async_setup()
+            _LOGGER.info("延迟重试设置成功")
+        except Exception as retry_e:
+            _LOGGER.error(f"重试设置仍然失败: {retry_e}")
+            # 不抛出异常，让集成继续加载，健康检查会处理后续问题
     
     # 注册服务
     async def handle_manual_sync(call):
