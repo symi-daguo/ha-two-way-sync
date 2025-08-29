@@ -1,4 +1,4 @@
-# Home Assistant 双向同步集成
+# Home Assistant SYMI双向同步集成
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
@@ -271,7 +271,17 @@ data:
 
 ---
 
-**版本**: 1.2.0  
-**更新时间**: 2025年1月  
+## 版本历史
+
+### v2.0.0 (2025-08-29)
+- 发布正式版V2.0.0
+- 项目名称更新为Home Assistant SYMI双向同步
+- 完善的开关、调光、窗帘双向同步功能
+- 增强的看门狗重启恢复机制
+- 优化的实体状态检查和健康监控
+- 稳定的后台自动恢复功能
+
+**版本**: 2.0.0  
+**更新时间**: 2025年8月  
 **兼容性**: Home Assistant 2024.1.0+  
 **测试版本**: Home Assistant 2024.12.x

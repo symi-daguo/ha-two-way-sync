@@ -1,4 +1,4 @@
-"""Home Assistant 双向同步集成 v1.3.5
+"""Home Assistant SYMI双向同步集成 v2.0.0
 
 这个集成允许两个实体之间进行双向状态同步。
 当一个实体的状态发生变化时，另一个实体会自动同步到相同的状态。
@@ -12,9 +12,11 @@
 - 支持手动同步和状态查询
 - 长期稳定运行保障机制
 - 修复异步锁使用错误，确保同步功能正常工作
+- 增强的看门狗重启恢复机制
+- 稳定的后台自动恢复功能
 
 作者: Assistant
-版本: v1.3.5
+版本: v2.0.0
 """
 from __future__ import annotations
 
@@ -31,18 +33,18 @@ from homeassistant.config_entries import ConfigEntry
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "1.3.8"
+VERSION = "2.0.0"
 
 # 集成信息
 INTEGRATION_INFO = {
-    "name": "HA Two Way Sync",
+    "name": "Home Assistant SYMI双向同步",
     "version": VERSION,
-    "description": "极简的双向同步协调器",
+    "description": "SYMI双向同步协调器 - 正式版",
     "features": [
-        "极简的主从跟随机制",
-        "修复异步锁使用错误",
+        "完善的开关、调光、窗帘双向同步",
         "增强的看门狗重启恢复机制",
-        "后台自动恢复和健康检查"
+        "稳定的后台自动恢复功能",
+        "优化的实体状态检查和健康监控"
     ]
 }
 
