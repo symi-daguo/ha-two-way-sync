@@ -31,7 +31,7 @@ from homeassistant.config_entries import ConfigEntry
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "1.3.7"
+VERSION = "1.3.8"
 
 # 集成信息
 INTEGRATION_INFO = {
@@ -41,7 +41,8 @@ INTEGRATION_INFO = {
     "features": [
         "极简的主从跟随机制",
         "修复异步锁使用错误",
-        "轻量级重启容错机制"
+        "增强的看门狗重启恢复机制",
+        "后台自动恢复和健康检查"
     ]
 }
 
@@ -68,14 +69,16 @@ class SimpleSyncCoordinator:
         self._sync_cooldown = 0.1  # 100ms冷却时间
         
         # 实体存在性检查和重试机制
-        self._entity_check_retries = 3
-        self._entity_check_delay = 2.0  # 2秒延迟重试
-        self._health_check_interval = 300  # 5分钟健康检查
+        self._entity_check_retries = 10
+        self._entity_check_delay = 3.0  # 3秒延迟重试
+        self._health_check_interval = 60  # 1分钟健康检查（增强）
+        self._startup_wait_time = 15       # 启动等待时间（秒）
+        self._max_startup_retries = 5      # 最大启动重试次数
         self._last_health_check = 0
         
         # 同步失败重试机制
-        self._sync_retry_count = 2
-        self._sync_retry_delay = 1.0
+        self._sync_retry_count = 3
+        self._sync_retry_delay = 2.0
         self._last_health_check = 0  # 上次健康检查时间
         
         # 性能监控
@@ -177,27 +180,52 @@ class SimpleSyncCoordinator:
         self.hass.async_create_task(health_check())
         
     async def _perform_health_check(self) -> None:
-        """执行健康检查"""
+        """执行健康检查（增强版）"""
         try:
-            # 检查实体是否仍然存在
+            # 检查实体是否仍然存在和可用
             entity1_state = self.hass.states.get(self.entity1_id)
             entity2_state = self.hass.states.get(self.entity2_id)
             
-            if not entity1_state or not entity2_state:
-                _LOGGER.warning(f"健康检查发现实体不可用，尝试重新设置监听器")
+            entities_unavailable = (
+                not entity1_state or entity1_state.state == "unavailable" or
+                not entity2_state or entity2_state.state == "unavailable"
+            )
+            
+            # 检查是否有监听器（如果没有说明同步未正常工作）
+            no_listeners = not self._unsubscribe_listeners
+            
+            if entities_unavailable or no_listeners:
+                if entities_unavailable:
+                    _LOGGER.warning(f"健康检查发现实体不可用，尝试重新设置监听器")
+                if no_listeners:
+                    _LOGGER.warning(f"健康检查发现无监听器，尝试重新设置")
+                    
                 # 清理现有监听器
                 for unsubscribe in self._unsubscribe_listeners:
                     unsubscribe()
                 self._unsubscribe_listeners.clear()
                 
-                # 重新设置
-                if await self._check_entities_with_retry():
-                    await self._setup_listeners()
-                    _LOGGER.info("健康检查：监听器已重新设置")
-                else:
-                    _LOGGER.error("健康检查：无法重新设置监听器")
+                # 重新设置（带重试）
+                recovery_success = False
+                for retry in range(3):  # 健康检查时最多重试3次
+                    try:
+                        if await self._check_entities_with_retry():
+                            await self._setup_listeners()
+                            _LOGGER.info(f"健康检查：监听器已重新设置 (尝试 {retry + 1})")
+                            recovery_success = True
+                            break
+                        else:
+                            _LOGGER.warning(f"健康检查：实体检查失败 (尝试 {retry + 1})")
+                    except Exception as retry_e:
+                        _LOGGER.warning(f"健康检查重试失败 (尝试 {retry + 1}): {retry_e}")
+                    
+                    if retry < 2:  # 不是最后一次重试
+                        await asyncio.sleep(10)  # 等待10秒再重试
+                
+                if not recovery_success:
+                    _LOGGER.error("健康检查：无法重新设置监听器，将在下次健康检查时再次尝试")
             else:
-                _LOGGER.debug("健康检查：所有实体正常")
+                _LOGGER.debug("健康检查：所有实体正常，监听器工作正常")
                 
             # 性能监控报告
             self._log_performance_stats()
@@ -489,6 +517,34 @@ class SimpleSyncCoordinator:
             "last_sync_time": self._last_sync_time
         }
         
+    async def _background_recovery(self) -> None:
+        """后台恢复机制 - 定期尝试重新设置失败的同步"""
+        recovery_interval = 120  # 2分钟检查一次
+        max_recovery_attempts = 20  # 最多尝试20次（约40分钟）
+        
+        for attempt in range(max_recovery_attempts):
+            await asyncio.sleep(recovery_interval)
+            
+            if not self.enabled:
+                _LOGGER.debug("同步器已禁用，停止后台恢复")
+                break
+                
+            # 检查是否已经有监听器（说明已经恢复）
+            if self._unsubscribe_listeners:
+                _LOGGER.info("检测到同步已恢复，停止后台恢复任务")
+                break
+                
+            try:
+                _LOGGER.info(f"后台恢复尝试 {attempt + 1}/{max_recovery_attempts}")
+                await self.async_setup()
+                _LOGGER.info("后台恢复成功！")
+                break
+            except Exception as e:
+                _LOGGER.warning(f"后台恢复失败 (尝试 {attempt + 1}/{max_recovery_attempts}): {e}")
+                
+        if attempt == max_recovery_attempts - 1:
+            _LOGGER.error("后台恢复已达到最大尝试次数，请检查实体配置")
+    
     async def async_unload(self) -> None:
         """卸载同步器"""
         self.enabled = False
@@ -510,18 +566,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = SimpleSyncCoordinator(hass, entry)
     _sync_coordinators[entry.entry_id] = coordinator
     
-    # 轻量级重启容错：如果初始设置失败，延迟重试一次
-    try:
-        await coordinator.async_setup()
-    except Exception as e:
-        _LOGGER.warning(f"初始设置失败，5秒后重试: {e}")
-        await asyncio.sleep(5)
+    # 增强的重启容错机制：多次重试，逐渐增加延迟
+    setup_success = False
+    for attempt in range(coordinator._max_startup_retries):
         try:
             await coordinator.async_setup()
-            _LOGGER.info("延迟重试设置成功")
-        except Exception as retry_e:
-            _LOGGER.error(f"重试设置仍然失败: {retry_e}")
-            # 不抛出异常，让集成继续加载，健康检查会处理后续问题
+            setup_success = True
+            _LOGGER.info(f"设置成功 (尝试 {attempt + 1}/{coordinator._max_startup_retries})")
+            break
+        except Exception as e:
+            wait_time = coordinator._startup_wait_time + (attempt * 5)  # 递增延迟
+            if attempt < coordinator._max_startup_retries - 1:
+                _LOGGER.warning(f"设置失败 (尝试 {attempt + 1}/{coordinator._max_startup_retries})，{wait_time}秒后重试: {e}")
+                await asyncio.sleep(wait_time)
+            else:
+                _LOGGER.error(f"最终设置失败 (尝试 {attempt + 1}/{coordinator._max_startup_retries}): {e}")
+    
+    # 即使设置失败也继续加载，启动后台恢复任务
+    if not setup_success:
+        _LOGGER.info("启动后台恢复任务，将定期尝试重新设置同步")
+        hass.async_create_task(coordinator._background_recovery())
     
     # 注册服务
     async def handle_manual_sync(call):
