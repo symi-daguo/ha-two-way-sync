@@ -1,8 +1,16 @@
 # Home Assistant SYMI双向同步集成
 
+<div align="center">
+  <img src="SYMI-logo.png" alt="SYMI Logo" width="200"/>
+</div>
+
+<div align="center">
+
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
 [![License](https://img.shields.io/github/license/symi-daguo/ha-two-way-sync.svg)](LICENSE)
+
+</div>
 
 一个简单易用的 Home Assistant 自定义集成，用于实现两个实体之间的双向状态同步。
 

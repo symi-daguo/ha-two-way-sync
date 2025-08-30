@@ -1,0 +1,6 @@
+{
+  "domain": "symi",
+  "name": "SYMI",
+  "integrations": ["ha_two_way_sync"],
+  "iot_standards": []
+}

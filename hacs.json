@@ -1,9 +1,17 @@
 
 {
-  "name": "Home Assistant 双向同步",
+  "name": "Home Assistant SYMI双向同步",
   "content_in_root": false,
   "render_readme": true,
   "hide_default_branch": false,
   "homeassistant": "2024.1.0",
-  "zip_release": false
+  "zip_release": false,
+  "filename": "ha_two_way_sync.zip",
+  "country": ["CN"],
+  "iot_class": "Local Polling",
+  "brand": {
+    "name": "SYMI",
+    "logo": "SYMI-logo.png",
+    "domain": "ha_two_way_sync"
+  }
 }
