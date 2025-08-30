@@ -1,6 +1,6 @@
 # HACS 安装指南
 
-![SYMI Logo](SYMI-logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/logo.png)
 
 ## 通过 HACS 安装 Home Assistant SYMI双向同步集成
 
@@ -90,6 +90,6 @@ HACS 会自动检查更新。当有新版本可用时：
 
 ---
 
-**版本**: v2.0.1  
+**版本**: v2.0.3  
 **更新日期**: 2025年1月  
 **兼容性**: Home Assistant 2024.1.0+

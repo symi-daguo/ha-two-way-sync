@@ -1,6 +1,6 @@
 # Home Assistant SYMI双向同步集成
 
-![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/brands/master/custom_integrations/ha_two_way_sync/logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/logo.png)
 
 ## 简介
 
