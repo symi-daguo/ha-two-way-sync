@@ -1,6 +1,6 @@
 # HACS 官方提交指南
 
-![SYMI Logo](SYMI-logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/brands/master/custom_integrations/ha_two_way_sync/logo.png)
 
 ## 将 Home Assistant SYMI双向同步集成提交到 HACS 官方仓库
 
@@ -14,7 +14,7 @@
 - [x] 验证了 `manifest.json` 文件符合 Home Assistant 标准
 - [x] 添加了 SYMI 企业 logo 到适当位置
 - [x] 创建了品牌目录结构 (`brands/symi/`)
-- [x] 设置了正确的版本标签 (v2.0.1)
+- [x] 设置了正确的版本标签 (v2.0.2)
 - [x] 代码已推送到 GitHub 仓库
 
 ### HACS 官方提交流程
@@ -76,7 +76,7 @@ git push origin add-symi-two-way-sync
 ### 集成信息
 - **名称**: Home Assistant SYMI双向同步
 - **仓库**: https://github.com/symi-daguo/ha-two-way-sync
-- **版本**: v2.0.1
+- **版本**: v2.0.2
 - **类别**: 集成 (Integration)
 
 ### 功能特性
@@ -155,5 +155,5 @@ HACS 官方审核会检查：
 ---
 
 **准备状态**: ✅ 已就绪，可以提交到 HACS 官方仓库  
-**版本**: v2.0.1  
+**版本**: v2.0.2  
 **最后更新**: 2025年1月

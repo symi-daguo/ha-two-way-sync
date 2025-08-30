@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/brands/main/custom_integrations/ha_two_way_sync/logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/brands/master/custom_integrations/ha_two_way_sync/logo.png)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
@@ -12,7 +12,7 @@
 
 一个简单易用的 Home Assistant 自定义集成，用于实现两个实体之间的双向状态同步。
 
-## 🎉 V2.0.0 正式版发布（2025-08-29）
+## 🎉 V2.0.2 正式版发布（2025-08-29）
 
 ### ✨ 核心功能
 - **完善的双向同步**: 开关、调光、窗帘双向同步功能全面稳定
@@ -180,7 +180,7 @@ data:
 
 ---
 
-**当前版本**: V2.0.0  
+**当前版本**: V2.0.2  
 **发布日期**: 2025年8月29日  
 **兼容性**: Home Assistant 2024.1.0+  
 **测试版本**: Home Assistant 2024.12.x
