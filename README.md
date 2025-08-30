@@ -1,10 +1,6 @@
 # Home Assistant SYMI双向同步集成
 
 <div align="center">
-  <img src="SYMI-logo.png" alt="SYMI Logo" width="200"/>
-</div>
-
-<div align="center">
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)

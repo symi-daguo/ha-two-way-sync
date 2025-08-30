@@ -12,7 +12,5 @@
   "quality_scale": "silver",
   "requirements": [],
   "version": "2.0.1",
-  "integration_type": "hub",
-  "loggers": ["custom_components.ha_two_way_sync"],
-  "brand": "symi"
+  "integration_type": "hub"
 }
