@@ -138,9 +138,9 @@ class SimpleSyncCoordinator:
                 _LOGGER.warning(f"实体2未在注册表中找到: {self.entity2_id}")
                 
             if not entity1_state:
-                _LOGGER.warning(f"实体1状态不可用: {self.entity1_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
+                _LOGGER.debug(f"实体1状态不可用: {self.entity1_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
             if not entity2_state:
-                _LOGGER.warning(f"实体2状态不可用: {self.entity2_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
+                _LOGGER.debug(f"实体2状态不可用: {self.entity2_id} (尝试 {attempt + 1}/{self._entity_check_retries})")
                 
             if attempt < self._entity_check_retries - 1:
                 _LOGGER.info(f"等待 {self._entity_check_delay} 秒后重试...")
@@ -188,19 +188,24 @@ class SimpleSyncCoordinator:
             entity1_state = self.hass.states.get(self.entity1_id)
             entity2_state = self.hass.states.get(self.entity2_id)
             
-            entities_unavailable = (
-                not entity1_state or entity1_state.state == "unavailable" or
-                not entity2_state or entity2_state.state == "unavailable"
-            )
+            # 检查实体是否存在（不检查unavailable状态，因为设备可能临时离线）
+            entities_missing = not entity1_state or not entity2_state
             
             # 检查是否有监听器（如果没有说明同步未正常工作）
             no_listeners = not self._unsubscribe_listeners
             
-            if entities_unavailable or no_listeners:
-                if entities_unavailable:
-                    _LOGGER.warning(f"健康检查发现实体不可用，尝试重新设置监听器")
+            # 只有在实体完全不存在或没有监听器时才重新设置
+            if entities_missing or no_listeners:
+                if entities_missing:
+                    _LOGGER.warning(f"健康检查发现实体不存在，尝试重新设置监听器")
                 if no_listeners:
                     _LOGGER.warning(f"健康检查发现无监听器，尝试重新设置")
+                    
+                # 如果只是实体暂时不可用（unavailable），不重新设置监听器
+                if not entities_missing and entity1_state and entity2_state:
+                    if entity1_state.state == "unavailable" or entity2_state.state == "unavailable":
+                        _LOGGER.debug(f"实体暂时不可用但存在，保持监听器运行")
+                        return
                     
                 # 清理现有监听器
                 for unsubscribe in self._unsubscribe_listeners:
@@ -373,25 +378,26 @@ class SimpleSyncCoordinator:
                 self._sync_stats["avg_sync_time"] = total_time / self._sync_stats["total_syncs"]
                 
     async def _check_entity_availability(self, source_entity_id: str, target_entity_id: str) -> bool:
-        """检查实体可用性"""
+        """检查实体可用性（优化版：设备离线时不影响整体功能）"""
         source_state = self.hass.states.get(source_entity_id)
         target_state = self.hass.states.get(target_entity_id)
         
         if not source_state:
-            _LOGGER.warning(f"源实体不存在: {source_entity_id}")
+            _LOGGER.debug(f"源实体不存在: {source_entity_id}")
             return False
             
         if not target_state:
-            _LOGGER.warning(f"目标实体不存在: {target_entity_id}")
+            _LOGGER.debug(f"目标实体不存在: {target_entity_id}")
             return False
             
         # 检查实体是否可用（不是unavailable状态）
+        # 设备离线时只记录debug日志，不影响其他功能
         if source_state.state == "unavailable":
-            _LOGGER.debug(f"源实体不可用: {source_entity_id}")
+            _LOGGER.debug(f"源实体暂时不可用，跳过本次同步: {source_entity_id}")
             return False
             
         if target_state.state == "unavailable":
-            _LOGGER.debug(f"目标实体不可用: {target_entity_id}")
+            _LOGGER.debug(f"目标实体暂时不可用，跳过本次同步: {target_entity_id}")
             return False
             
         return True
@@ -405,9 +411,14 @@ class SimpleSyncCoordinator:
             if domain == "light":
                 # 灯光同步：开关、亮度、色温（跳过颜色避免冲突）
                 if source_state.state == "on":
-                    # 同步亮度
+                    # 同步亮度（确保类型转换为整数）
                     if "brightness" in source_state.attributes:
-                        service_data["brightness"] = source_state.attributes["brightness"]
+                        try:
+                            brightness_value = source_state.attributes["brightness"]
+                            if brightness_value is not None:
+                                service_data["brightness"] = int(float(brightness_value))
+                        except (ValueError, TypeError) as e:
+                            _LOGGER.warning(f"亮度值转换失败: {source_state.attributes['brightness']} - {e}")
                     
                     # 同步色温（支持新旧格式，避免颜色冲突）
                     color_temp_value = self._get_color_temp_value(source_state.attributes)
