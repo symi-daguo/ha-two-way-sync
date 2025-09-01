@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![SYMI Logo](https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/logo.png)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
