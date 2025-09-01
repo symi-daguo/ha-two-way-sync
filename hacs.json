@@ -7,7 +7,7 @@
   "render_readme": true,
   "brands": {
     "domain": "ha_two_way_sync",
-    "logo": "https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/logo.png",
-    "icon": "https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/icon.png"
+    "logo": "https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/main/logo.png",
+    "icon": "https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/main/icon.png"
   }
 }
