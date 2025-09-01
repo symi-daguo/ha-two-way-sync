@@ -2,12 +2,7 @@
 {
   "name": "Home Assistant SYMI双向同步",
   "hacs": "1.6.0",
-  "homeassistant": "2024.1.0",
+  "domains": ["ha_two_way_sync"],
   "iot_class": "Local Polling",
-  "render_readme": true,
-  "brands": {
-    "domain": "ha_two_way_sync",
-    "logo": "https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/logo.png",
-    "icon": "https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/icon.png"
-  }
+  "homeassistant": "2024.1.0"
 }
