@@ -194,7 +194,6 @@ data:
 
 ## 📚 相关文档
 
-- **[SETUP_INSTRUCTIONS.md](SETUP_INSTRUCTIONS.md)**: HACS 收录详细设置指南
 - **[LICENSE](LICENSE)**: 项目许可证
 
 ## 🏷️ HACS 收录信息
