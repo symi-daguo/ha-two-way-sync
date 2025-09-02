@@ -1,7 +1,0 @@
-{
-  "domain": "ha_two_way_sync",
-  "name": "SYMI双向同步",
-  "integrations": [
-    "ha_two_way_sync"
-  ]
-}
