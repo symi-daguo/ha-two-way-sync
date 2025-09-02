@@ -1,0 +1,9 @@
+{
+  "name": "Home Assistant SYMI双向同步",
+  "render_readme": true,
+  "country": "CN",
+  "homeassistant": "2024.1.0",
+  "zip_release": true,
+  "filename": "ha_two_way_sync.zip",
+  "hide_default_branch": true
+}

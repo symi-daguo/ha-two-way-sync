@@ -1,0 +1,30 @@
+manual_sync:
+  name: 手动同步
+  description: 手动触发两个实体之间的同步
+  fields:
+    config_entry_id:
+      name: 配置条目ID
+      description: 要同步的配置条目ID
+      required: true
+      selector:
+        text:
+    direction:
+      name: 同步方向
+      description: 同步方向：entity1_to_entity2 或 entity2_to_entity1
+      required: true
+      selector:
+        select:
+          options:
+            - "entity1_to_entity2"
+            - "entity2_to_entity1"
+
+toggle_sync:
+  name: 切换同步状态
+  description: 启用或禁用指定配置的同步功能
+  fields:
+    config_entry_id:
+      name: 配置条目ID
+      description: 要切换的配置条目ID
+      required: true
+      selector:
+        text:

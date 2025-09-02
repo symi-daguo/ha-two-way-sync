@@ -1,0 +1,18 @@
+{
+  "domain": "symi",
+  "name": "Home Assistant SYMI双向同步",
+  "codeowners": [
+    "@wgqtx"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
+  "homeassistant": "2024.1.0",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
+  "loggers": ["custom_components.symi"],
+  "quality_scale": "silver",
+  "requirements": [],
+  "version": "2.1.0",
+  "integration_type": "device"
+}
