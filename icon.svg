@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect width="128" height="128" fill="#2980b9" rx="8"/>
-  <text x="64" y="75" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle">SYMI</text>
-  <circle cx="32" cy="40" r="8" fill="white" opacity="0.8"/>
-  <circle cx="96" cy="40" r="8" fill="white" opacity="0.8"/>
-  <path d="M20 40 L44 40 M84 40 L108 40" stroke="white" stroke-width="3" opacity="0.6"/>
-  <path d="M32 48 L32 88 M96 48 L96 88" stroke="white" stroke-width="2" opacity="0.6"/>
-  <path d="M40 88 L88 88" stroke="white" stroke-width="2" opacity="0.6"/>
-</svg>

@@ -1,4 +1,4 @@
-"""Home Assistant SYMI双向同步集成 v2.0.8
+"""Home Assistant SYMI双向同步集成 v2.1.0
 
 这个集成允许两个实体之间进行双向状态同步。
 当一个实体的状态发生变化时，另一个实体会自动同步到相同的状态。
@@ -16,7 +16,7 @@
 - 稳定的后台自动恢复功能
 
 作者: Assistant
-版本: v2.0.8
+版本: v2.1.0
 """
 from __future__ import annotations
 
@@ -416,14 +416,14 @@ class SimpleSyncCoordinator:
                         try:
                             brightness_value = source_state.attributes["brightness"]
                             if brightness_value is not None:
-                                service_data["brightness"] = int(float(brightness_value))
+                                service_data["brightness"] = str(int(float(brightness_value)))
                         except (ValueError, TypeError) as e:
                             _LOGGER.warning(f"亮度值转换失败: {source_state.attributes['brightness']} - {e}")
                     
                     # 同步色温（支持新旧格式，避免颜色冲突）
                     color_temp_value = self._get_color_temp_value(source_state.attributes)
                     if color_temp_value is not None:
-                        service_data["color_temp_kelvin"] = color_temp_value
+                        service_data["color_temp_kelvin"] = str(color_temp_value)
                     
                     await self.hass.services.async_call("light", "turn_on", service_data)
                 else:
@@ -534,6 +534,7 @@ class SimpleSyncCoordinator:
         """后台恢复机制 - 定期尝试重新设置失败的同步"""
         recovery_interval = 120  # 2分钟检查一次
         max_recovery_attempts = 20  # 最多尝试20次（约40分钟）
+        attempt = 0  # 初始化attempt变量
         
         for attempt in range(max_recovery_attempts):
             await asyncio.sleep(recovery_interval)

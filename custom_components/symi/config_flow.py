@@ -13,10 +13,15 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "symi"
 
 
-class TwoWaySyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class TwoWaySyncConfigFlow(config_entries.ConfigFlow):
     """双向同步配置流程"""
     
     VERSION = 1
+    
+    def __init__(self):
+        """Initialize the config flow."""
+        super().__init__()
+        self.domain = DOMAIN
     
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
