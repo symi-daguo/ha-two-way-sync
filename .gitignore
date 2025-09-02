@@ -163,3 +163,8 @@ cython_debug/
 
 # Trae AI
 .trae/
+
+# Temporary scripts
+*.ps1
+HACS_SUBMISSION_GUIDE.md
+SETUP_INSTRUCTIONS.md

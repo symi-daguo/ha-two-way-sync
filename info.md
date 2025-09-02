@@ -1,6 +1,6 @@
 # Home Assistant SYMI双向同步集成
 
-![SYMI Logo](https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/ha_two_way_sync/logo.png)
+![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/logo.png)
 
 ## 简介
 
@@ -42,6 +42,6 @@ SYMI是专注于智能家居解决方案的技术品牌，致力于为用户提�
 
 ---
 
-**版本**: 2.0.2  
+**版本**: 2.0.7  
 **兼容性**: Home Assistant 2024.1.0+  
 **许可证**: MIT License
