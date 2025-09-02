@@ -17,6 +17,5 @@
   "ssdp": [],
   "version": "2.0.7",
   "integration_type": "hub",
-  "logo": "logo.png",
   "zeroconf": []
 }
