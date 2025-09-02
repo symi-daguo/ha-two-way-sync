@@ -4,13 +4,25 @@
 
 ![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/logo.png)
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
 [![License](https://img.shields.io/github/license/symi-daguo/ha-two-way-sync.svg)](LICENSE)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0+-blue.svg)](https://www.home-assistant.io/)
 
 </div>
 
 一个简单易用的 Home Assistant 自定义集成，用于实现两个实体之间的双向状态同步。
+
+## 📢 HACS 收录状态
+
+**当前状态**: 已提交 HACS 收录申请
+
+- ✅ **GitHub Release v2.0.3**: 已创建
+- ✅ **仓库描述和 Topics**: 已配置
+- 🔄 **Brands 仓库 Logo PR**: [#7810](https://github.com/home-assistant/brands/pull/7810) - 等待审核
+- ❌ **HACS 收录申请 PR**: [#4061](https://github.com/hacs/default/pull/4061) - 已关闭，需重新提交
+
+> **注意**: HACS 收录申请正在处理中。在正式收录前，请使用手动安装方式或通过自定义存储库安装。
 
 ## 🎉 V2.0.3 正式版发布（2025-01-21）
 
@@ -37,7 +49,9 @@
 
 ## 🚀 安装方法
 
-### 方法一：通过 HACS 安装（推荐）
+### 方法一：通过 HACS 安装
+
+**当前状态**: HACS 收录申请正在处理中，暂时需要通过自定义存储库安装
 
 1. 确保已安装 [HACS](https://hacs.xyz/)
 2. 在 HACS 中点击 "集成"
@@ -46,6 +60,8 @@
 5. 类别选择 "集成"
 6. 搜索并安装 "Home Assistant 双向同步集成"
 7. 重启 Home Assistant
+
+> **未来**: 一旦 HACS 收录申请通过，您将可以直接在 HACS 默认存储库中搜索并安装此集成。
 
 ### 方法二：手动安装
 
@@ -178,9 +194,23 @@ data:
 - **GitHub Issues**: [提交问题](https://github.com/symi-daguo/ha-two-way-sync/issues)
 - **邮箱**: 303316404@qq.com
 
+## 📚 相关文档
+
+- **[SETUP_INSTRUCTIONS.md](SETUP_INSTRUCTIONS.md)**: HACS 收录详细设置指南
+- **[LICENSE](LICENSE)**: 项目许可证
+
+## 🏷️ HACS 收录信息
+
+本项目正在申请加入 HACS 默认存储库，相关进展：
+
+- **Brands 仓库**: 已提交 Logo 文件 PR [#7810](https://github.com/home-assistant/brands/pull/7810)
+- **HACS 默认仓库**: 已提交收录申请 PR [#4061](https://github.com/hacs/default/pull/4061)（已关闭，需重新提交）
+- **收录要求**: 已满足所有 HACS 收录要求（GitHub Release、仓库描述、Topics 等）
+
 ---
 
 **当前版本**: V2.0.3  
 **发布日期**: 2025年1月21日  
 **兼容性**: Home Assistant 2024.1.0+  
-**测试版本**: Home Assistant 2024.12.x
+**测试版本**: Home Assistant 2024.12.x  
+**HACS 状态**: 收录申请中
