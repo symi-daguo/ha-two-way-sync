@@ -11,7 +11,7 @@
   ],
   "requirements": [],
   "homeassistant": "2024.1.0",
-  "integration_type": "hub",
+  "integration_type": "service",
   "iot_class": "local_polling",
   "loggers": ["custom_components.ha_two_way_sync"],
   "quality_scale": "silver"
