@@ -14,5 +14,6 @@
   "quality_scale": "silver",
   "requirements": [],
   "version": "2.0.7",
-  "integration_type": "hub"
+  "integration_type": "hub",
+  "logo": "logo.png"
 }
