@@ -2,8 +2,6 @@
 
 <div align="center">
 
-![SYMI Logo](https://raw.githubusercontent.com/symi-daguo/ha-two-way-sync/master/logo.png)
-
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
 [![License](https://img.shields.io/github/license/symi-daguo/ha-two-way-sync.svg)](LICENSE)

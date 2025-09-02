@@ -1,5 +1,5 @@
 {
-  "name": "ha_two_way_sync",
+  "name": "Home Assistant SYMI双向同步",
   "render_readme": true,
   "country": "CN",
   "homeassistant": "2024.1.0"
