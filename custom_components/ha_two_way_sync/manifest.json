@@ -9,11 +9,14 @@
   "after_dependencies": [],
   "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
   "homeassistant": "2024.1.0",
+  "homekit": {},
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
   "quality_scale": "silver",
   "requirements": [],
+  "ssdp": [],
   "version": "2.0.7",
   "integration_type": "hub",
-  "logo": "logo.png"
+  "logo": "logo.png",
+  "zeroconf": []
 }
