@@ -11,7 +11,7 @@
   "issue_tracker": "https://github.com/wgqtx/ha-two-way-sync/issues",
   "quality_scale": "silver",
   "requirements": [],
-  "version": "2.0.3",
+  "version": "2.0.4",
   "integration_type": "hub",
   "brand": "ha_two_way_sync"
 }
