@@ -15,14 +15,14 @@
 
 **当前状态**: 已提交 HACS 收录申请
 
-- ✅ **GitHub Release v2.0.3**: 已创建
+- ✅ **GitHub Release v2.0.8**: 已创建
 - ✅ **仓库描述和 Topics**: 已配置
-- 🔄 **Brands 仓库 Logo PR**: [#7810](https://github.com/home-assistant/brands/pull/7810) - 等待审核
-- ❌ **HACS 收录申请 PR**: [#4061](https://github.com/hacs/default/pull/4061) - 已关闭，需重新提交
+- ✅ **Brands 仓库 Logo PR**: [#7818](https://github.com/home-assistant/brands/pull/7818) - 已提交
+- 🔄 **HACS 收录申请**: 等待 Brands PR 合并后重新提交
 
 > **注意**: HACS 收录申请正在处理中。在正式收录前，请使用手动安装方式或通过自定义存储库安装。
 
-## 🎉 V2.0.3 正式版发布（2025-01-21）
+## 🎉 V2.0.8 正式版发布（2025-01-22）
 
 ### ✨ 核心功能
 - **完善的双向同步**: 开关、调光、窗帘双向同步功能全面稳定
@@ -201,14 +201,14 @@ data:
 
 本项目正在申请加入 HACS 默认存储库，相关进展：
 
-- **Brands 仓库**: 已提交 Logo 文件 PR [#7810](https://github.com/home-assistant/brands/pull/7810)
-- **HACS 默认仓库**: 已提交收录申请 PR [#4061](https://github.com/hacs/default/pull/4061)（已关闭，需重新提交）
-- **收录要求**: 已满足所有 HACS 收录要求（GitHub Release、仓库描述、Topics 等）
+- **Brands 仓库**: 已提交 SYMI 品牌图标 PR [#7818](https://github.com/home-assistant/brands/pull/7818)
+- **HACS 默认仓库**: 等待 Brands PR 合并后重新提交收录申请
+- **收录要求**: 已满足所有 HACS 收录要求（GitHub Release、仓库描述、Topics、品牌图标等）
 
 ---
 
-**当前版本**: V2.0.3  
-**发布日期**: 2025年1月21日  
+**当前版本**: V2.0.8  
+**发布日期**: 2025年1月22日  
 **兼容性**: Home Assistant 2024.1.0+  
 **测试版本**: Home Assistant 2024.12.x  
 **HACS 状态**: 收录申请中

@@ -2,6 +2,7 @@
   "domain": "ha_two_way_sync",
   "name": "Home Assistant SYMI双向同步",
   "after_dependencies": [],
+  "brand": "symi",
   "codeowners": [
     "@wgqtx"
   ],
