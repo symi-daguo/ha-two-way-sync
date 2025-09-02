@@ -1,18 +1,18 @@
 {
   "domain": "ha_two_way_sync",
   "name": "Home Assistant SYMI双向同步",
+  "version": "2.0.8",
+  "config_flow": true,
+  "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
+  "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
+  "dependencies": [],
   "codeowners": [
     "@wgqtx"
   ],
-  "config_flow": true,
-  "dependencies": [],
-  "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
+  "requirements": [],
   "homeassistant": "2024.1.0",
   "integration_type": "hub",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
   "loggers": ["custom_components.ha_two_way_sync"],
-  "quality_scale": "silver",
-  "requirements": [],
-  "version": "2.0.8"
+  "quality_scale": "silver"
 }
