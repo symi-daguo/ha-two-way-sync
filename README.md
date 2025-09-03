@@ -15,7 +15,7 @@
 
 **当前状态**: 已提交 HACS 收录申请
 
-- ✅ **GitHub Release v2.0.8**: 已创建
+- ✅ **GitHub Release v2.1.1**: 已创建
 - ✅ **仓库描述和 Topics**: 已配置
 - ✅ **Brands 仓库 Logo PR**: [#7818](https://github.com/home-assistant/brands/pull/7818) - 已提交
 - 🔄 **HACS 收录申请**: 等待 Brands PR 合并后重新提交

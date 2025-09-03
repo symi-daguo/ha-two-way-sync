@@ -1,4 +1,4 @@
-"""Home Assistant SYMI双向同步集成 v2.0.8
+"""Home Assistant SYMI双向同步集成 v2.1.1
 
 这个集成允许两个实体之间进行双向状态同步。
 当一个实体的状态发生变化时，另一个实体会自动同步到相同的状态。
@@ -16,7 +16,7 @@
 - 稳定的后台自动恢复功能
 
 作者: Assistant
-版本: v2.0.8
+版本: v2.1.1
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from homeassistant.config_entries import ConfigEntry
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.0.8"
+VERSION = "2.1.1"
 
 # 集成信息
 INTEGRATION_INFO = {
