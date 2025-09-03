@@ -416,32 +416,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 注册服务
     async def manual_sync_service(call: ServiceCall):
         """手动同步服务"""
-        entry_id = call.data.get("entry_id")
-        if entry_id and entry_id in SYNC_COORDINATORS:
-            await SYNC_COORDINATORS[entry_id].manual_sync()
+        config_entry_id = call.data.get("config_entry_id")
+        direction = call.data.get("direction")
+        
+        if config_entry_id and config_entry_id in SYNC_COORDINATORS:
+            coordinator = SYNC_COORDINATORS[config_entry_id]
+            if direction == "entity1_to_entity2":
+                state1 = hass.states.get(coordinator.entity1)
+                if state1:
+                    await coordinator._instant_sync(coordinator.entity1, coordinator.entity2, state1)
+            elif direction == "entity2_to_entity1":
+                state2 = hass.states.get(coordinator.entity2)
+                if state2:
+                    await coordinator._instant_sync(coordinator.entity2, coordinator.entity1, state2)
+            else:
+                await coordinator.manual_sync()
         else:
             # 同步所有配置
             for coord in SYNC_COORDINATORS.values():
                 await coord.manual_sync()
     
-    async def get_status_service(call: ServiceCall):
-        """获取状态服务"""
-        entry_id = call.data.get("entry_id")
-        if entry_id and entry_id in SYNC_COORDINATORS:
-            status = SYNC_COORDINATORS[entry_id].get_sync_status()
-            _LOGGER.info(f"同步状态: {status}")
-        else:
-            # 获取所有状态
-            for coord_id, coord in SYNC_COORDINATORS.items():
-                status = coord.get_sync_status()
-                _LOGGER.info(f"同步状态 [{coord_id}]: {status}")
+    async def toggle_sync_service(call: ServiceCall):
+        """切换同步状态服务"""
+        config_entry_id = call.data.get("config_entry_id")
+        if config_entry_id and config_entry_id in SYNC_COORDINATORS:
+            coordinator = SYNC_COORDINATORS[config_entry_id]
+            coordinator.enabled = not coordinator.enabled
+            _LOGGER.info(f"同步状态已切换为: {'启用' if coordinator.enabled else '禁用'}")
+    
+    async def reload_service(call: ServiceCall):
+        """重新加载集成服务"""
+        _LOGGER.info("重新加载双向同步集成...")
+        # 重新加载所有配置条目
+        for coord in SYNC_COORDINATORS.values():
+            await coord.async_unload()
+            await coord.async_setup()
+        _LOGGER.info("双向同步集成重新加载完成")
     
     # 注册服务（只注册一次）
     if not hass.services.has_service(DOMAIN, "manual_sync"):
         hass.services.async_register(DOMAIN, "manual_sync", manual_sync_service)
     
-    if not hass.services.has_service(DOMAIN, "get_status"):
-        hass.services.async_register(DOMAIN, "get_status", get_status_service)
+    if not hass.services.has_service(DOMAIN, "toggle_sync"):
+        hass.services.async_register(DOMAIN, "toggle_sync", toggle_sync_service)
+    
+    if not hass.services.has_service(DOMAIN, "reload"):
+        hass.services.async_register(DOMAIN, "reload", reload_service)
     
     _LOGGER.info(f"双向同步配置条目设置完成: {entry.title}")
     return True

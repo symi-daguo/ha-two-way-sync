@@ -6,8 +6,9 @@
   "documentation": "https://github.com/symi-daguo/ha-two-way-sync",
   "issue_tracker": "https://github.com/symi-daguo/ha-two-way-sync/issues",
   "codeowners": ["@symi-daguo"],
-  "homeassistant": "2023.1.0",
+  "homeassistant": "2024.1.0",
   "dependencies": [],
   "requirements": [],
-  "iot_class": "local_polling"
+  "iot_class": "local_polling",
+  "integration_type": "service"
 }
