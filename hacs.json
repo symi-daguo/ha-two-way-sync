@@ -4,6 +4,6 @@
   "country": "CN",
   "homeassistant": "2024.1.0",
   "zip_release": true,
-  "filename": "symi.zip",
+  "filename": "ha-two-way-sync.zip",
   "hide_default_branch": true
 }

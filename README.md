@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![GitHub release](https://img.shields.io/github/release/symi-daguo/ha-two-way-sync.svg)](https://github.com/symi-daguo/ha-two-way-sync/releases)
 [![License](https://img.shields.io/github/license/symi-daguo/ha-two-way-sync.svg)](LICENSE)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1.0+-blue.svg)](https://www.home-assistant.io/)
@@ -11,30 +11,13 @@
 
 一个简单易用的 Home Assistant 自定义集成，用于实现两个实体之间的双向状态同步。
 
-## 📢 HACS 收录状态
-
-**当前状态**: 已提交 HACS 收录申请
-
-- ✅ **GitHub Release v2.1.1**: 已创建
-- ✅ **仓库描述和 Topics**: 已配置
-- ✅ **Brands 仓库 Logo PR**: [#7818](https://github.com/home-assistant/brands/pull/7818) - 已提交
-- 🔄 **HACS 收录申请**: 等待 Brands PR 合并后重新提交
-
-> **注意**: HACS 收录申请正在处理中。在正式收录前，请使用手动安装方式或通过自定义存储库安装。
-
-## 🎉 V2.1.1 正式版发布（2025-01-24）
+## 🎉 V2.1.1 正式版发布（2025年9月3日）
 
 ### ✨ 核心功能
 - **完善的双向同步**: 开关、调光、窗帘双向同步功能全面稳定
 - **增强的看门狗机制**: 重启恢复机制，确保系统稳定性
 - **优化的状态检查**: 实体状态检查和健康监控
 - **稳定的自动恢复**: 后台自动恢复功能
-
-### 🔧 V2.1.1 更新内容
-- **修复 HACS 下载问题**: 修复了 HACS 中无法下载集成的 404 错误
-- **Logo 显示优化**: 完善了集成 Logo 在 Home Assistant 界面中的显示
-- **配置文件优化**: 更新了 hacs.json 和 manifest.json 配置
-- **发布流程改进**: 优化了 GitHub Release 发布流程，确保文件正确上传
 
 ## ✨ 功能特性
 
@@ -212,8 +195,8 @@ data:
 
 ---
 
-**当前版本**: V2.0.8  
-**发布日期**: 2025年1月22日  
+**当前版本**: V2.1.1  
+**发布日期**: 2025年9月3日  
 **兼容性**: Home Assistant 2024.1.0+  
 **测试版本**: Home Assistant 2024.12.x  
 **HACS 状态**: 收录申请中
