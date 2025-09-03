@@ -55,6 +55,11 @@
           "description": "要切换的配置条目ID"
         }
       }
+    },
+    "reload": {
+      "name": "重新加载集成",
+      "description": "重新加载所有双向同步配置",
+      "fields": {}
     }
   }
 }
