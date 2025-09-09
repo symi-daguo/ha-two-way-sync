@@ -18,59 +18,85 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.1.3"
+VERSION = "2.1.4"
 
 # 全局同步器字典
 SYNC_COORDINATORS = {}
 
+# 实体检查重试配置
+ENTITY_CHECK_RETRY_DELAY = 30  # 30秒后重试
+ENTITY_CHECK_MAX_RETRIES = 10  # 最多重试10次
+ENTITY_CHECK_INTERVAL = timedelta(seconds=30)  # 定期检查间隔
+
 class TwoWaySyncCoordinator:
     """双向同步协调器"""
-    
+
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry):
         self.hass = hass
         self.config_entry = config_entry
         self.entity1 = config_entry.data["entity1"]
         self.entity2 = config_entry.data["entity2"]
         self.enabled = config_entry.options.get("enabled", config_entry.data.get("enabled", True))
-        
+
         # 同步状态跟踪
         self._syncing = False
         self._last_sync_time = {}
-        self._sync_cooldown = 1.0  # 同步冷却时间
+        self._sync_cooldown = 2.0  # 增加同步冷却时间到2秒
         self._retry_count = {}
         self._max_retries = 3
-        
+        self._sync_source = None  # 记录同步源，防止循环
+
+        # 实体状态跟踪
+        self._entities_ready = False
+        self._entity_check_retries = 0
+        self._entity_check_timer = None
+
         # 性能监控
         self._sync_stats = {
             "total_syncs": 0,
             "successful_syncs": 0,
             "failed_syncs": 0,
             "last_sync_time": None,
-            "average_sync_duration": 0.0
+            "average_sync_duration": 0.0,
+            "entities_ready": False,
+            "last_entity_check": None
         }
-        
+
         # 健康检查
         self._last_health_check = time.time()
         self._health_check_interval = 300  # 5分钟
-        
+
         # 事件监听器
         self._listeners = []
-        
+
         _LOGGER.info(f"初始化双向同步: {self.entity1} <-> {self.entity2}")
     
     async def async_setup(self):
         """设置同步器"""
-        # 检查实体存在性
-        if not await self._check_entities_exist():
-            _LOGGER.error(f"实体不存在，无法设置同步: {self.entity1}, {self.entity2}")
-            return False
-        
+        # 延迟启动，给HA时间加载所有实体
+        await asyncio.sleep(2)
+
+        # 尝试检查实体存在性
+        if await self._check_entities_exist():
+            await self._setup_listeners()
+            self._entities_ready = True
+            self._sync_stats["entities_ready"] = True
+            _LOGGER.info(f"双向同步设置完成: {self.entity1} <-> {self.entity2}")
+            return True
+        else:
+            # 实体不存在，启动定期检查
+            _LOGGER.warning(f"实体暂时不可用，将定期检查: {self.entity1}, {self.entity2}")
+            await self._start_entity_check_timer()
+            return True  # 不返回False，而是继续尝试
+
+    async def _setup_listeners(self):
+        """设置事件监听器"""
         # 注册状态变化监听器
         self._listeners.append(
             async_track_state_change_event(
@@ -82,37 +108,110 @@ class TwoWaySyncCoordinator:
                 self.hass, [self.entity2], self._handle_entity2_change
             )
         )
-        
-        _LOGGER.info(f"双向同步设置完成: {self.entity1} <-> {self.entity2}")
-        return True
+
+        # 添加健康检查定时器
+        self._listeners.append(
+            async_track_time_interval(
+                self.hass, self._health_check, ENTITY_CHECK_INTERVAL
+            )
+        )
+
+    async def _start_entity_check_timer(self):
+        """启动实体检查定时器"""
+        if self._entity_check_timer:
+            self._entity_check_timer()
+
+        self._entity_check_timer = async_track_time_interval(
+            self.hass, self._periodic_entity_check, ENTITY_CHECK_INTERVAL
+        )
+        self._listeners.append(self._entity_check_timer)
+
+    async def _periodic_entity_check(self, now):
+        """定期检查实体是否可用"""
+        if self._entities_ready:
+            return
+
+        if self._entity_check_retries >= ENTITY_CHECK_MAX_RETRIES:
+            _LOGGER.error(f"实体检查重试次数已达上限，停止检查: {self.entity1}, {self.entity2}")
+            return
+
+        self._entity_check_retries += 1
+        self._sync_stats["last_entity_check"] = datetime.now().isoformat()
+
+        if await self._check_entities_exist():
+            _LOGGER.info(f"实体现在可用，启用同步: {self.entity1} <-> {self.entity2}")
+            await self._setup_listeners()
+            self._entities_ready = True
+            self._sync_stats["entities_ready"] = True
+
+            # 停止实体检查定时器
+            if self._entity_check_timer:
+                self._entity_check_timer()
+                self._entity_check_timer = None
+        else:
+            _LOGGER.debug(f"实体仍不可用，将在{ENTITY_CHECK_RETRY_DELAY}秒后重试 (第{self._entity_check_retries}次)")
+
+    async def _health_check(self, now):
+        """健康检查"""
+        if not self._entities_ready:
+            return
+
+        # 检查实体是否仍然存在
+        if not await self._check_entities_exist():
+            _LOGGER.warning(f"检测到实体不可用，重新启动检查: {self.entity1}, {self.entity2}")
+            self._entities_ready = False
+            self._sync_stats["entities_ready"] = False
+            self._entity_check_retries = 0
+            await self._start_entity_check_timer()
+
+        self._last_health_check = time.time()
     
     async def _check_entities_exist(self) -> bool:
         """检查实体是否存在"""
         state1 = self.hass.states.get(self.entity1)
         state2 = self.hass.states.get(self.entity2)
-        
+
+        missing_entities = []
         if not state1:
-            _LOGGER.error(f"实体 {self.entity1} 不存在")
-            return False
+            missing_entities.append(self.entity1)
         if not state2:
-            _LOGGER.error(f"实体 {self.entity2} 不存在")
+            missing_entities.append(self.entity2)
+
+        if missing_entities:
+            if self._entity_check_retries == 0:
+                _LOGGER.warning(f"以下实体不存在或尚未加载: {', '.join(missing_entities)}")
+            else:
+                _LOGGER.debug(f"实体检查第{self._entity_check_retries}次: {', '.join(missing_entities)} 仍不可用")
             return False
-        
+
+        _LOGGER.debug(f"实体检查通过: {self.entity1}, {self.entity2}")
         return True
     
     def _should_sync(self, entity_id: str) -> bool:
         """检查是否应该同步"""
         if not self.enabled:
+            _LOGGER.debug(f"同步已禁用: {entity_id}")
             return False
-        
+
+        if not self._entities_ready:
+            _LOGGER.debug(f"实体尚未准备就绪: {entity_id}")
+            return False
+
         if self._syncing:
+            _LOGGER.debug(f"同步正在进行中，跳过: {entity_id}")
             return False
-        
+
+        # 防止循环同步：如果当前同步源就是这个实体，跳过
+        if self._sync_source == entity_id:
+            _LOGGER.debug(f"防止循环同步，跳过: {entity_id}")
+            return False
+
         # 检查冷却时间
         last_sync = self._last_sync_time.get(entity_id, 0)
         if time.time() - last_sync < self._sync_cooldown:
+            _LOGGER.debug(f"同步冷却中，跳过: {entity_id}")
             return False
-        
+
         return True
     
     async def _handle_entity1_change(self, event: Event):
@@ -151,42 +250,48 @@ class TwoWaySyncCoordinator:
         """即时同步"""
         if self._syncing:
             return
-        
+
         self._syncing = True
+        self._sync_source = source_entity  # 记录同步源
         start_time = time.time()
-        
+
         try:
             self._last_sync_time[source_entity] = time.time()
-            
+
             # 检查目标实体可用性
             if not await self._check_entity_availability(target_entity):
                 _LOGGER.warning(f"目标实体 {target_entity} 不可用，跳过同步")
                 return
-            
+
+            _LOGGER.debug(f"开始同步: {source_entity} -> {target_entity}")
+
             # 执行完美同步
             success = await self._perfect_sync(source_entity, target_entity, source_state)
-            
+
             # 更新统计信息
             self._sync_stats["total_syncs"] += 1
             if success:
                 self._sync_stats["successful_syncs"] += 1
                 self._retry_count[source_entity] = 0
+                _LOGGER.debug(f"同步成功: {source_entity} -> {target_entity}")
             else:
                 self._sync_stats["failed_syncs"] += 1
                 self._retry_count[source_entity] = self._retry_count.get(source_entity, 0) + 1
-            
+                _LOGGER.warning(f"同步失败: {source_entity} -> {target_entity}")
+
             duration = time.time() - start_time
             self._sync_stats["average_sync_duration"] = (
                 (self._sync_stats["average_sync_duration"] * (self._sync_stats["total_syncs"] - 1) + duration) /
                 self._sync_stats["total_syncs"]
             )
             self._sync_stats["last_sync_time"] = datetime.now().isoformat()
-            
+
         except Exception as e:
-            _LOGGER.error(f"同步过程中发生错误: {e}")
+            _LOGGER.error(f"同步过程中发生错误 {source_entity} -> {target_entity}: {e}")
             self._sync_stats["failed_syncs"] += 1
         finally:
             self._syncing = False
+            self._sync_source = None  # 清除同步源记录
     
     async def _check_entity_availability(self, entity_id: str) -> bool:
         """检查实体可用性"""
@@ -380,9 +485,22 @@ class TwoWaySyncCoordinator:
     
     async def async_unload(self):
         """卸载同步器"""
+        # 停止所有监听器
         for listener in self._listeners:
-            listener()
+            if callable(listener):
+                listener()
         self._listeners.clear()
+
+        # 停止实体检查定时器
+        if self._entity_check_timer:
+            self._entity_check_timer()
+            self._entity_check_timer = None
+
+        # 重置状态
+        self._syncing = False
+        self._sync_source = None
+        self._entities_ready = False
+
         _LOGGER.info(f"双向同步已卸载: {self.entity1} <-> {self.entity2}")
 
 
@@ -395,23 +513,23 @@ async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """设置配置条目"""
     _LOGGER.info(f"设置双向同步配置条目: {entry.title}")
-    
-    # 轻量级重启容错机制
-    await asyncio.sleep(0.1)  # 给系统一点时间完成初始化
-    
-    # 创建同步协调器
-    coordinator = TwoWaySyncCoordinator(hass, entry)
-    
-    # 设置同步器
-    if not await coordinator.async_setup():
-        _LOGGER.error(f"无法设置同步器: {entry.title}")
+
+    try:
+        # 创建同步协调器
+        coordinator = TwoWaySyncCoordinator(hass, entry)
+
+        # 设置同步器（现在总是返回True，即使实体暂时不可用）
+        await coordinator.async_setup()
+
+        # 存储协调器
+        if DOMAIN not in hass.data:
+            hass.data[DOMAIN] = {}
+        hass.data[DOMAIN][entry.entry_id] = coordinator
+        SYNC_COORDINATORS[entry.entry_id] = coordinator
+
+    except Exception as e:
+        _LOGGER.error(f"设置配置条目时发生错误 {entry.title}: {e}")
         return False
-    
-    # 存储协调器
-    if DOMAIN not in hass.data:
-        hass.data[DOMAIN] = {}
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-    SYNC_COORDINATORS[entry.entry_id] = coordinator
     
     # 注册服务
     async def manual_sync_service(call: ServiceCall):
@@ -447,11 +565,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def reload_service(call: ServiceCall):
         """重新加载集成服务"""
         _LOGGER.info("重新加载双向同步集成...")
-        # 重新加载所有配置条目
-        for coord in SYNC_COORDINATORS.values():
-            await coord.async_unload()
-            await coord.async_setup()
-        _LOGGER.info("双向同步集成重新加载完成")
+        try:
+            # 重新加载所有配置条目
+            reload_count = 0
+            for coord in SYNC_COORDINATORS.values():
+                try:
+                    await coord.async_unload()
+                    await coord.async_setup()
+                    reload_count += 1
+                    _LOGGER.debug(f"重新加载同步器: {coord.entity1} <-> {coord.entity2}")
+                except Exception as e:
+                    _LOGGER.error(f"重新加载同步器失败 {coord.entity1} <-> {coord.entity2}: {e}")
+
+            _LOGGER.info(f"双向同步集成重新加载完成，成功重载 {reload_count} 个同步器")
+        except Exception as e:
+            _LOGGER.error(f"重新加载集成时发生错误: {e}")
     
     # 注册服务（只注册一次）
     if not hass.services.has_service(DOMAIN, "manual_sync"):
