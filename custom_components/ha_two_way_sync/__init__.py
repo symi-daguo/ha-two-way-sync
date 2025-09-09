@@ -24,7 +24,7 @@ from homeassistant.helpers.service import async_register_admin_service
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.1.5"
+VERSION = "2.1.6"
 
 # 全局同步器字典
 SYNC_COORDINATORS = {}
@@ -296,11 +296,11 @@ class TwoWaySyncCoordinator:
                 _LOGGER.debug(f"灯光HS颜色变化: {old_hs} -> {new_hs}")
                 return True
 
-            # 检查色温变化
+            # 检查色温变化（独立检测，不依赖其他颜色属性）
             old_temp = self._get_color_temp_value(old_state.attributes)
             new_temp = self._get_color_temp_value(new_state.attributes)
-            if old_temp != new_temp:
-                _LOGGER.debug(f"灯光色温变化: {old_temp} -> {new_temp}")
+            if old_temp != new_temp and new_temp is not None:
+                _LOGGER.debug(f"灯光色温变化: {old_temp}K -> {new_temp}K")
                 return True
 
         # 窗帘设备：检查位置变化
@@ -324,6 +324,47 @@ class TwoWaySyncCoordinator:
             new_speed = new_state.attributes.get("percentage")
             if old_speed != new_speed:
                 _LOGGER.debug(f"风扇速度变化: {old_speed} -> {new_speed}")
+                return True
+
+        # 空调设备：检查温度、模式变化
+        elif domain == "climate":
+            # 检查目标温度变化
+            old_temp = old_state.attributes.get("temperature")
+            new_temp = new_state.attributes.get("temperature")
+            if old_temp != new_temp:
+                _LOGGER.debug(f"空调温度变化: {old_temp} -> {new_temp}")
+                return True
+
+            # 检查HVAC模式变化
+            old_hvac = old_state.attributes.get("hvac_mode")
+            new_hvac = new_state.attributes.get("hvac_mode")
+            if old_hvac != new_hvac:
+                _LOGGER.debug(f"空调模式变化: {old_hvac} -> {new_hvac}")
+                return True
+
+        # 媒体播放器：检查状态和音量变化
+        elif domain == "media_player":
+            # 检查音量变化
+            old_volume = old_state.attributes.get("volume_level")
+            new_volume = new_state.attributes.get("volume_level")
+            if old_volume != new_volume:
+                _LOGGER.debug(f"媒体播放器音量变化: {old_volume} -> {new_volume}")
+                return True
+
+        # 数字输入：检查数值变化
+        elif domain in ["number", "input_number"]:
+            # 检查数值变化
+            old_value = old_state.attributes.get("value") or old_state.state
+            new_value = new_state.attributes.get("value") or new_state.state
+            if old_value != new_value:
+                _LOGGER.debug(f"{domain}数值变化: {old_value} -> {new_value}")
+                return True
+
+        # 选择器：检查选项变化
+        elif domain in ["select", "input_select"]:
+            # 状态就是选中的选项
+            if old_state.state != new_state.state:
+                _LOGGER.debug(f"{domain}选项变化: {old_state.state} -> {new_state.state}")
                 return True
 
         return False
@@ -409,28 +450,32 @@ class TwoWaySyncCoordinator:
                     if "brightness" in source_state.attributes:
                         service_data["brightness"] = source_state.attributes["brightness"]
 
-                    # 同步颜色属性 - 按优先级只设置一个，避免冲突
-                    # 优先级：rgb_color > hs_color > color_temp_kelvin
-                    color_set = False
+                    # 同步颜色属性 - 智能检测变化的属性并同步
+                    # 检测哪个颜色属性发生了变化，优先同步变化的属性
+                    target_state = self.hass.states.get(target_entity)
 
-                    # 优先使用RGB颜色
-                    if "rgb_color" in source_state.attributes and source_state.attributes["rgb_color"]:
-                        service_data["rgb_color"] = source_state.attributes["rgb_color"]
-                        color_set = True
-                        _LOGGER.debug(f"同步RGB颜色: {source_state.attributes['rgb_color']}")
+                    # 检查RGB颜色变化
+                    source_rgb = source_state.attributes.get("rgb_color")
+                    target_rgb = target_state.attributes.get("rgb_color") if target_state else None
+                    if source_rgb and source_rgb != target_rgb:
+                        service_data["rgb_color"] = source_rgb
+                        _LOGGER.debug(f"同步RGB颜色变化: {target_rgb} -> {source_rgb}")
 
-                    # 其次使用HS颜色
-                    elif "hs_color" in source_state.attributes and source_state.attributes["hs_color"]:
-                        service_data["hs_color"] = source_state.attributes["hs_color"]
-                        color_set = True
-                        _LOGGER.debug(f"同步HS颜色: {source_state.attributes['hs_color']}")
+                    # 检查HS颜色变化
+                    elif not source_rgb:  # 只有在没有RGB颜色时才检查HS
+                        source_hs = source_state.attributes.get("hs_color")
+                        target_hs = target_state.attributes.get("hs_color") if target_state else None
+                        if source_hs and source_hs != target_hs:
+                            service_data["hs_color"] = source_hs
+                            _LOGGER.debug(f"同步HS颜色变化: {target_hs} -> {source_hs}")
 
-                    # 最后使用色温（只有在没有设置其他颜色时）
-                    elif not color_set:
-                        color_temp = self._get_color_temp_value(source_state.attributes)
-                        if color_temp:
-                            service_data["color_temp_kelvin"] = color_temp
-                            _LOGGER.debug(f"同步色温: {color_temp}K")
+                        # 检查色温变化（只有在没有RGB和HS颜色时）
+                        else:
+                            source_temp = self._get_color_temp_value(source_state.attributes)
+                            target_temp = self._get_color_temp_value(target_state.attributes) if target_state else None
+                            if source_temp and source_temp != target_temp:
+                                service_data["color_temp_kelvin"] = source_temp
+                                _LOGGER.debug(f"同步色温变化: {target_temp}K -> {source_temp}K")
 
                     # 同步效果
                     if "effect" in source_state.attributes and source_state.attributes["effect"]:
@@ -524,7 +569,79 @@ class TwoWaySyncCoordinator:
                     await self.hass.services.async_call(
                         "climate", "set_temperature", service_data
                     )
-            
+
+            # 媒体播放器同步
+            elif source_domain == "media_player" and target_domain == "media_player":
+                # 同步播放状态
+                if source_state.state in ["playing", "paused", "idle", "off"]:
+                    if source_state.state == "playing":
+                        await self.hass.services.async_call(
+                            "media_player", "media_play", {ATTR_ENTITY_ID: target_entity}
+                        )
+                    elif source_state.state == "paused":
+                        await self.hass.services.async_call(
+                            "media_player", "media_pause", {ATTR_ENTITY_ID: target_entity}
+                        )
+                    elif source_state.state == "off":
+                        await self.hass.services.async_call(
+                            "media_player", "turn_off", {ATTR_ENTITY_ID: target_entity}
+                        )
+
+                # 同步音量
+                if "volume_level" in source_state.attributes:
+                    volume = source_state.attributes["volume_level"]
+                    await self.hass.services.async_call(
+                        "media_player", "volume_set",
+                        {ATTR_ENTITY_ID: target_entity, "volume_level": volume}
+                    )
+                    _LOGGER.debug(f"媒体播放器同步音量: {volume}")
+
+            # 数字输入同步
+            elif source_domain in ["number", "input_number"] and target_domain in ["number", "input_number"]:
+                value = source_state.state
+                try:
+                    value = float(value)
+                    if source_domain == "number":
+                        await self.hass.services.async_call(
+                            "number", "set_value",
+                            {ATTR_ENTITY_ID: target_entity, "value": value}
+                        )
+                    else:  # input_number
+                        await self.hass.services.async_call(
+                            "input_number", "set_value",
+                            {ATTR_ENTITY_ID: target_entity, "value": value}
+                        )
+                    _LOGGER.debug(f"{source_domain}同步数值: {value}")
+                except ValueError:
+                    _LOGGER.warning(f"无法转换数值: {value}")
+
+            # 选择器同步
+            elif source_domain in ["select", "input_select"] and target_domain in ["select", "input_select"]:
+                option = source_state.state
+                if source_domain == "select":
+                    await self.hass.services.async_call(
+                        "select", "select_option",
+                        {ATTR_ENTITY_ID: target_entity, "option": option}
+                    )
+                else:  # input_select
+                    await self.hass.services.async_call(
+                        "input_select", "select_option",
+                        {ATTR_ENTITY_ID: target_entity, "option": option}
+                    )
+                _LOGGER.debug(f"{source_domain}同步选项: {option}")
+
+            # 布尔输入同步
+            elif source_domain == "input_boolean" and target_domain == "input_boolean":
+                if source_state.state == STATE_ON:
+                    await self.hass.services.async_call(
+                        "input_boolean", SERVICE_TURN_ON, {ATTR_ENTITY_ID: target_entity}
+                    )
+                else:
+                    await self.hass.services.async_call(
+                        "input_boolean", SERVICE_TURN_OFF, {ATTR_ENTITY_ID: target_entity}
+                    )
+                _LOGGER.debug(f"input_boolean同步状态: {source_state.state}")
+
             # 其他设备类型的基本开关同步
             else:
                 if source_state.state == STATE_ON:
