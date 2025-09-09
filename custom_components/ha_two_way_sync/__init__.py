@@ -18,13 +18,13 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval, async_track_service_calls
 from homeassistant.helpers.service import async_register_admin_service
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.1.6"
+VERSION = "2.1.7"
 
 # 全局同步器字典
 SYNC_COORDINATORS = {}
@@ -51,6 +51,7 @@ class TwoWaySyncCoordinator:
         self._retry_count = {}
         self._max_retries = 3
         self._sync_source = None  # 记录同步源，防止循环
+        self._our_service_calls = set()  # 跟踪我们发起的服务调用，避免循环
 
         # 实体状态跟踪
         self._entities_ready = False
@@ -96,18 +97,43 @@ class TwoWaySyncCoordinator:
             return True  # 不返回False，而是继续尝试
 
     async def _setup_listeners(self):
-        """设置事件监听器"""
-        # 注册状态变化监听器
-        self._listeners.append(
-            async_track_state_change_event(
-                self.hass, [self.entity1], self._handle_entity1_change
+        """设置事件监听器 - 区分设备类型使用不同策略"""
+        entity1_domain = self.entity1.split(".")[0]
+        entity2_domain = self.entity2.split(".")[0]
+
+        # 对于有步进过程的设备（light调光、cover位置），监听服务调用而不是状态变化
+        stepping_domains = ["light", "cover"]
+
+        if entity1_domain in stepping_domains or entity2_domain in stepping_domains:
+            _LOGGER.info(f"设置服务调用监听器用于有步进设备: {self.entity1} <-> {self.entity2}")
+            # 监听light域的服务调用
+            if entity1_domain == "light" or entity2_domain == "light":
+                self._listeners.append(
+                    async_track_service_calls(
+                        self.hass, "light", self._handle_light_service_call
+                    )
+                )
+
+            # 监听cover域的服务调用
+            if entity1_domain == "cover" or entity2_domain == "cover":
+                self._listeners.append(
+                    async_track_service_calls(
+                        self.hass, "cover", self._handle_cover_service_call
+                    )
+                )
+        else:
+            _LOGGER.info(f"设置状态变化监听器用于即时设备: {self.entity1} <-> {self.entity2}")
+            # 对于即时生效的设备，继续使用状态变化监听
+            self._listeners.append(
+                async_track_state_change_event(
+                    self.hass, [self.entity1], self._handle_entity1_change
+                )
             )
-        )
-        self._listeners.append(
-            async_track_state_change_event(
-                self.hass, [self.entity2], self._handle_entity2_change
+            self._listeners.append(
+                async_track_state_change_event(
+                    self.hass, [self.entity2], self._handle_entity2_change
+                )
             )
-        )
 
         # 添加健康检查定时器
         self._listeners.append(
@@ -369,6 +395,138 @@ class TwoWaySyncCoordinator:
 
         return False
 
+    async def _handle_light_service_call(self, call: ServiceCall):
+        """处理灯光服务调用 - 直接同步控制命令"""
+        # 检查是否是我们发起的调用，避免循环
+        call_id = f"{call.service}_{call.data.get(ATTR_ENTITY_ID)}"
+        if call_id in self._our_service_calls:
+            self._our_service_calls.discard(call_id)
+            return
+
+        target_entities = call.data.get(ATTR_ENTITY_ID, [])
+        if isinstance(target_entities, str):
+            target_entities = [target_entities]
+
+        # 检查是否涉及我们监控的实体
+        source_entity = None
+        target_entity = None
+
+        if self.entity1 in target_entities:
+            source_entity = self.entity1
+            target_entity = self.entity2
+        elif self.entity2 in target_entities:
+            source_entity = self.entity2
+            target_entity = self.entity1
+        else:
+            return  # 不是我们监控的实体
+
+        # 检查目标实体是否也是灯光
+        if not target_entity.startswith("light."):
+            return
+
+        _LOGGER.debug(f"检测到灯光服务调用: {call.service} -> {source_entity}")
+
+        # 复制服务调用到目标实体
+        await self._mirror_light_service_call(call, target_entity)
+
+    async def _mirror_light_service_call(self, original_call: ServiceCall, target_entity: str):
+        """镜像灯光服务调用到目标实体"""
+        try:
+            # 复制服务调用数据
+            service_data = original_call.data.copy()
+            service_data[ATTR_ENTITY_ID] = target_entity
+
+            # 处理色温范围限制 (2700K-6500K)
+            if "color_temp_kelvin" in service_data:
+                temp = service_data["color_temp_kelvin"]
+                service_data["color_temp_kelvin"] = max(2700, min(6500, temp))
+                _LOGGER.debug(f"色温限制到范围: {temp} -> {service_data['color_temp_kelvin']}")
+
+            # 处理旧格式色温 (mired转换)
+            if "color_temp" in service_data:
+                mired = service_data["color_temp"]
+                if mired and mired > 0:
+                    kelvin = int(1000000 / mired)
+                    kelvin = max(2700, min(6500, kelvin))  # 限制范围
+                    service_data["color_temp_kelvin"] = kelvin
+                    del service_data["color_temp"]  # 删除旧格式
+                    _LOGGER.debug(f"色温转换: {mired}mired -> {kelvin}K")
+
+            # 标记这是我们发起的调用
+            call_id = f"{original_call.service}_{target_entity}"
+            self._our_service_calls.add(call_id)
+
+            # 执行服务调用
+            await self.hass.services.async_call(
+                "light", original_call.service, service_data
+            )
+
+            _LOGGER.debug(f"镜像灯光服务调用成功: {original_call.service} -> {target_entity}")
+
+        except Exception as e:
+            _LOGGER.error(f"镜像灯光服务调用失败: {e}")
+            # 清理标记
+            call_id = f"{original_call.service}_{target_entity}"
+            self._our_service_calls.discard(call_id)
+
+    async def _handle_cover_service_call(self, call: ServiceCall):
+        """处理窗帘服务调用 - 直接同步控制命令"""
+        # 检查是否是我们发起的调用，避免循环
+        call_id = f"{call.service}_{call.data.get(ATTR_ENTITY_ID)}"
+        if call_id in self._our_service_calls:
+            self._our_service_calls.discard(call_id)
+            return
+
+        target_entities = call.data.get(ATTR_ENTITY_ID, [])
+        if isinstance(target_entities, str):
+            target_entities = [target_entities]
+
+        # 检查是否涉及我们监控的实体
+        source_entity = None
+        target_entity = None
+
+        if self.entity1 in target_entities:
+            source_entity = self.entity1
+            target_entity = self.entity2
+        elif self.entity2 in target_entities:
+            source_entity = self.entity2
+            target_entity = self.entity1
+        else:
+            return  # 不是我们监控的实体
+
+        # 检查目标实体是否也是窗帘
+        if not target_entity.startswith("cover."):
+            return
+
+        _LOGGER.debug(f"检测到窗帘服务调用: {call.service} -> {source_entity}")
+
+        # 复制服务调用到目标实体
+        await self._mirror_cover_service_call(call, target_entity)
+
+    async def _mirror_cover_service_call(self, original_call: ServiceCall, target_entity: str):
+        """镜像窗帘服务调用到目标实体"""
+        try:
+            # 复制服务调用数据
+            service_data = original_call.data.copy()
+            service_data[ATTR_ENTITY_ID] = target_entity
+
+            # 标记这是我们发起的调用
+            call_id = f"{original_call.service}_{target_entity}"
+            self._our_service_calls.add(call_id)
+
+            # 执行服务调用
+            await self.hass.services.async_call(
+                "cover", original_call.service, service_data
+            )
+
+            _LOGGER.debug(f"镜像窗帘服务调用成功: {original_call.service} -> {target_entity}")
+
+        except Exception as e:
+            _LOGGER.error(f"镜像窗帘服务调用失败: {e}")
+            # 清理标记
+            call_id = f"{original_call.service}_{target_entity}"
+            self._our_service_calls.discard(call_id)
+
     async def _instant_sync(self, source_entity: str, target_entity: str, source_state):
         """即时同步"""
         if self._syncing:
@@ -422,18 +580,24 @@ class TwoWaySyncCoordinator:
         return state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
     
     def _get_color_temp_value(self, attributes: Dict[str, Any]) -> Optional[int]:
-        """获取色温值，支持新旧格式兼容"""
+        """获取色温值，支持新旧格式兼容，限制在2700K-6500K范围"""
+        temp_kelvin = None
+
         # 新格式：color_temp_kelvin
         if "color_temp_kelvin" in attributes:
-            return attributes["color_temp_kelvin"]
-        
+            temp_kelvin = attributes["color_temp_kelvin"]
+
         # 旧格式：color_temp (mired值)
-        if "color_temp" in attributes:
+        elif "color_temp" in attributes:
             mired = attributes["color_temp"]
             if mired and mired > 0:
-                return int(1000000 / mired)  # 转换为开尔文
-        
-        return None
+                temp_kelvin = int(1000000 / mired)  # 转换为开尔文
+
+        # 限制色温范围到2700K-6500K
+        if temp_kelvin is not None:
+            temp_kelvin = max(2700, min(6500, temp_kelvin))
+
+        return temp_kelvin
     
     async def _perfect_sync(self, source_entity: str, target_entity: str, source_state) -> bool:
         """完美同步 - 同步所有相关属性"""
