@@ -24,7 +24,7 @@ from homeassistant.helpers.service import async_register_admin_service
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.1.4"
+VERSION = "2.1.5"
 
 # 全局同步器字典
 SYNC_COORDINATORS = {}
@@ -218,34 +218,116 @@ class TwoWaySyncCoordinator:
         """处理实体1状态变化"""
         if not self._should_sync(self.entity1):
             return
-        
+
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
-        
+
         if not new_state or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
-        
-        if old_state and old_state.state == new_state.state:
-            return
-        
-        await self._instant_sync(self.entity1, self.entity2, new_state)
+
+        # 检查是否需要同步
+        should_sync = False
+
+        # 状态变化检查
+        if not old_state or old_state.state != new_state.state:
+            should_sync = True
+            _LOGGER.debug(f"实体1状态变化: {old_state.state if old_state else 'None'} -> {new_state.state}")
+
+        # 对于有步进过程的设备，检查关键属性变化
+        elif self._should_check_attributes(self.entity1, new_state, old_state):
+            should_sync = True
+
+        if should_sync:
+            await self._instant_sync(self.entity1, self.entity2, new_state)
     
     async def _handle_entity2_change(self, event: Event):
         """处理实体2状态变化"""
         if not self._should_sync(self.entity2):
             return
-        
+
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
-        
+
         if not new_state or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
-        
-        if old_state and old_state.state == new_state.state:
-            return
-        
-        await self._instant_sync(self.entity2, self.entity1, new_state)
-    
+
+        # 检查是否需要同步
+        should_sync = False
+
+        # 状态变化检查
+        if not old_state or old_state.state != new_state.state:
+            should_sync = True
+            _LOGGER.debug(f"实体2状态变化: {old_state.state if old_state else 'None'} -> {new_state.state}")
+
+        # 对于有步进过程的设备，检查关键属性变化
+        elif self._should_check_attributes(self.entity2, new_state, old_state):
+            should_sync = True
+
+        if should_sync:
+            await self._instant_sync(self.entity2, self.entity1, new_state)
+
+    def _should_check_attributes(self, entity_id: str, new_state, old_state) -> bool:
+        """检查是否应该检查属性变化（用于有步进过程的设备）"""
+        if not old_state:
+            return False
+
+        domain = entity_id.split(".")[0]
+
+        # 灯光设备：检查亮度、颜色、色温变化
+        if domain == "light":
+            # 检查亮度变化
+            old_brightness = old_state.attributes.get("brightness")
+            new_brightness = new_state.attributes.get("brightness")
+            if old_brightness != new_brightness:
+                _LOGGER.debug(f"灯光亮度变化: {old_brightness} -> {new_brightness}")
+                return True
+
+            # 检查颜色变化
+            old_rgb = old_state.attributes.get("rgb_color")
+            new_rgb = new_state.attributes.get("rgb_color")
+            if old_rgb != new_rgb:
+                _LOGGER.debug(f"灯光RGB颜色变化: {old_rgb} -> {new_rgb}")
+                return True
+
+            # 检查HS颜色变化
+            old_hs = old_state.attributes.get("hs_color")
+            new_hs = new_state.attributes.get("hs_color")
+            if old_hs != new_hs:
+                _LOGGER.debug(f"灯光HS颜色变化: {old_hs} -> {new_hs}")
+                return True
+
+            # 检查色温变化
+            old_temp = self._get_color_temp_value(old_state.attributes)
+            new_temp = self._get_color_temp_value(new_state.attributes)
+            if old_temp != new_temp:
+                _LOGGER.debug(f"灯光色温变化: {old_temp} -> {new_temp}")
+                return True
+
+        # 窗帘设备：检查位置变化
+        elif domain == "cover":
+            old_position = old_state.attributes.get("current_position")
+            new_position = new_state.attributes.get("current_position")
+            if old_position != new_position:
+                _LOGGER.debug(f"窗帘位置变化: {old_position} -> {new_position}")
+                return True
+
+            # 检查倾斜变化
+            old_tilt = old_state.attributes.get("current_tilt_position")
+            new_tilt = new_state.attributes.get("current_tilt_position")
+            if old_tilt != new_tilt:
+                _LOGGER.debug(f"窗帘倾斜变化: {old_tilt} -> {new_tilt}")
+                return True
+
+        # 风扇设备：检查速度变化
+        elif domain == "fan":
+            old_speed = old_state.attributes.get("percentage")
+            new_speed = new_state.attributes.get("percentage")
+            if old_speed != new_speed:
+                _LOGGER.debug(f"风扇速度变化: {old_speed} -> {new_speed}")
+                return True
+
+        return False
+
     async def _instant_sync(self, source_entity: str, target_entity: str, source_state):
         """即时同步"""
         if self._syncing:
@@ -318,62 +400,79 @@ class TwoWaySyncCoordinator:
             source_domain = source_entity.split(".")[0]
             target_domain = target_entity.split(".")[0]
             
-            # 灯光设备同步
+            # 灯光设备同步 - 有步进过程，立即同步目标状态
             if source_domain == "light" and target_domain == "light":
                 if source_state.state == STATE_ON:
                     service_data = {ATTR_ENTITY_ID: target_entity}
-                    
+
                     # 同步亮度
                     if "brightness" in source_state.attributes:
                         service_data["brightness"] = source_state.attributes["brightness"]
-                    
-                    # 同步色温
-                    color_temp = self._get_color_temp_value(source_state.attributes)
-                    if color_temp:
-                        service_data["color_temp_kelvin"] = color_temp
-                    
-                    # 同步颜色
-                    if "rgb_color" in source_state.attributes:
+
+                    # 同步颜色属性 - 按优先级只设置一个，避免冲突
+                    # 优先级：rgb_color > hs_color > color_temp_kelvin
+                    color_set = False
+
+                    # 优先使用RGB颜色
+                    if "rgb_color" in source_state.attributes and source_state.attributes["rgb_color"]:
                         service_data["rgb_color"] = source_state.attributes["rgb_color"]
-                    elif "hs_color" in source_state.attributes:
+                        color_set = True
+                        _LOGGER.debug(f"同步RGB颜色: {source_state.attributes['rgb_color']}")
+
+                    # 其次使用HS颜色
+                    elif "hs_color" in source_state.attributes and source_state.attributes["hs_color"]:
                         service_data["hs_color"] = source_state.attributes["hs_color"]
-                    
+                        color_set = True
+                        _LOGGER.debug(f"同步HS颜色: {source_state.attributes['hs_color']}")
+
+                    # 最后使用色温（只有在没有设置其他颜色时）
+                    elif not color_set:
+                        color_temp = self._get_color_temp_value(source_state.attributes)
+                        if color_temp:
+                            service_data["color_temp_kelvin"] = color_temp
+                            _LOGGER.debug(f"同步色温: {color_temp}K")
+
                     # 同步效果
-                    if "effect" in source_state.attributes:
+                    if "effect" in source_state.attributes and source_state.attributes["effect"]:
                         service_data["effect"] = source_state.attributes["effect"]
-                    
+
+                    _LOGGER.debug(f"灯光同步数据: {service_data}")
                     await self.hass.services.async_call("light", SERVICE_TURN_ON, service_data)
                 else:
                     await self.hass.services.async_call(
                         "light", SERVICE_TURN_OFF, {ATTR_ENTITY_ID: target_entity}
                     )
             
-            # 窗帘设备同步
+            # 窗帘设备同步 - 有步进过程，立即同步目标状态
             elif source_domain == "cover" and target_domain == "cover":
-                if source_state.state == "open":
+                # 优先同步位置，因为位置更精确
+                if "current_position" in source_state.attributes:
+                    position = source_state.attributes["current_position"]
+                    _LOGGER.debug(f"窗帘同步位置: {position}%")
+                    await self.hass.services.async_call(
+                        "cover", "set_cover_position",
+                        {ATTR_ENTITY_ID: target_entity, "position": position}
+                    )
+                # 如果没有位置信息，使用开关状态
+                elif source_state.state == "open":
+                    _LOGGER.debug("窗帘同步: 打开")
                     await self.hass.services.async_call(
                         "cover", "open_cover", {ATTR_ENTITY_ID: target_entity}
                     )
                 elif source_state.state == "closed":
+                    _LOGGER.debug("窗帘同步: 关闭")
                     await self.hass.services.async_call(
                         "cover", "close_cover", {ATTR_ENTITY_ID: target_entity}
                     )
-                else:
-                    # 同步位置
-                    if "current_position" in source_state.attributes:
-                        position = source_state.attributes["current_position"]
-                        await self.hass.services.async_call(
-                            "cover", "set_cover_position", 
-                            {ATTR_ENTITY_ID: target_entity, "position": position}
-                        )
-                    
-                    # 同步倾斜
-                    if "current_tilt_position" in source_state.attributes:
-                        tilt = source_state.attributes["current_tilt_position"]
-                        await self.hass.services.async_call(
-                            "cover", "set_cover_tilt_position", 
-                            {ATTR_ENTITY_ID: target_entity, "tilt_position": tilt}
-                        )
+
+                # 同步倾斜（如果支持）
+                if "current_tilt_position" in source_state.attributes:
+                    tilt = source_state.attributes["current_tilt_position"]
+                    _LOGGER.debug(f"窗帘同步倾斜: {tilt}%")
+                    await self.hass.services.async_call(
+                        "cover", "set_cover_tilt_position",
+                        {ATTR_ENTITY_ID: target_entity, "tilt_position": tilt}
+                    )
             
             # 风扇设备同步
             elif source_domain == "fan" and target_domain == "fan":
