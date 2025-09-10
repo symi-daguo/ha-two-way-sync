@@ -18,13 +18,13 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval, async_track_service_calls
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "ha_two_way_sync"
-VERSION = "2.1.8"
+VERSION = "2.1.9"
 
 # 全局同步器字典
 SYNC_COORDINATORS = {}
@@ -111,18 +111,33 @@ class TwoWaySyncCoordinator:
             _LOGGER.warning(f"🚨 检测到有步进设备，启用纯服务调用监听模式: {self.entity1} <-> {self.entity2}")
             _LOGGER.warning("⚠️  绝不监听状态变化，只监听用户控制动作")
 
-            # 监听light域的所有服务调用
-            self._listeners.append(
-                async_track_service_calls(
-                    self.hass, "light", self._handle_light_service_call
-                )
-            )
+            # 使用事件监听来监听服务调用
+            @callback
+            def handle_service_call_event(event):
+                """处理服务调用事件"""
+                service_data = event.data
+                domain = service_data.get("domain")
+                service = service_data.get("service")
+                service_call_data = service_data.get("service_data", {})
 
-            # 监听cover域的所有服务调用
+                # 创建模拟的ServiceCall对象
+                class MockServiceCall:
+                    def __init__(self, domain, service, data):
+                        self.domain = domain
+                        self.service = service
+                        self.data = data
+
+                mock_call = MockServiceCall(domain, service, service_call_data)
+
+                # 根据域名分发到对应的处理器
+                if domain == "light":
+                    self.hass.async_create_task(self._handle_light_service_call(mock_call))
+                elif domain == "cover":
+                    self.hass.async_create_task(self._handle_cover_service_call(mock_call))
+
+            # 监听call_service事件
             self._listeners.append(
-                async_track_service_calls(
-                    self.hass, "cover", self._handle_cover_service_call
-                )
+                self.hass.bus.async_listen("call_service", handle_service_call_event)
             )
 
             _LOGGER.info(f"✅ 已设置纯服务调用监听器，避免步进过程干扰")
